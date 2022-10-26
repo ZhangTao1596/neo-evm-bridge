@@ -98,21 +98,36 @@ func (l *Listener) Listen() {
 			for _, execution := range applicationlog.Executions {
 				if execution.Trigger == "Application" && execution.VMState == "HALT" {
 					for _, notification := range execution.Notifications {
-						if isDeposit, requestId, _, _, _ := l.isDepositEvent(&notification); isDeposit {
+						isDeposit, requestId, _, _, _, err := l.isDepositEvent(&notification)
+						if err != nil {
+							panic(err)
+						}
+						if isDeposit {
 							batch.addTask(depositTask{
 								txid:      txid,
 								requestId: requestId,
 							})
-
-						} else if isDesignate, _ := l.isDesignateValidatorsEvent(&notification); isDesignate {
-							batch.addTask(validatorsDesignateTask{
-								txid: txid,
-							})
-						} else if isStateValidatorsDesignate, index := l.isStateValidatorsDesignatedEvent(&notification); isStateValidatorsDesignate {
-							batch.addTask(stateValidatorsChangeTask{
-								txid:  txid,
-								index: index,
-							})
+						} else {
+							isDesignate, _, err := l.isDesignateValidatorsEvent(&notification)
+							if err != nil {
+								panic(err)
+							}
+							if isDesignate {
+								batch.addTask(validatorsDesignateTask{
+									txid: txid,
+								})
+							} else {
+								isStateValidatorsDesignate, index, err := l.isStateValidatorsDesignatedEvent(&notification)
+								if err != nil {
+									panic(err)
+								}
+								if isStateValidatorsDesignate {
+									batch.addTask(stateValidatorsChangeTask{
+										txid:  txid,
+										index: index,
+									})
+								}
+							}
 						}
 					}
 				}
@@ -151,51 +166,55 @@ func (l *Listener) isRoleManagement(notification *models.RpcNotification) bool {
 	return *contractInNotication == *l.roleManagementContractAddress
 }
 
-func (l *Listener) isStateValidatorsDesignatedEvent(notification *models.RpcNotification) (bool, uint32) {
+func (l *Listener) isStateValidatorsDesignatedEvent(notification *models.RpcNotification) (bool, uint32, error) {
 	if !l.isRoleManagement(notification) || notification.EventName != "Designation" {
-		return false, 0
+		return false, 0, nil
 	}
 	if notification.State.Type != vm.Array.String() {
-		panic("invalid role deposit event type")
+		return false, 0, errors.New("invalid role deposit event type")
 	}
 	notification.State.Convert()
 	arr := notification.State.Value.([]models.InvokeStack)
 	if len(arr) != 2 {
-		panic("invalid role deposite event arguments count")
+		return false, 0, errors.New("invalid role deposite event arguments count")
 	}
 	role, err := strconv.Atoi(arr[0].Value.(string))
 	if err != nil {
-		panic(fmt.Errorf("can't parse role: %w", err))
+		return false, 0, fmt.Errorf("can't parse role: %w", err)
 	}
 	if role != StateValidatorRole {
-		return false, 0
+		return false, 0, nil
 	}
 	index, err := strconv.ParseUint(arr[1].Value.(string), 10, 32)
 	if err != nil {
-		panic(fmt.Errorf("can't parse index: %w", err))
+		return false, 0, fmt.Errorf("can't parse index: %w", err)
 	}
-	return true, uint32(index)
+	return true, uint32(index), nil
 }
 
-func (l *Listener) isDepositEvent(notification *models.RpcNotification) (isDeposit bool, requestId uint64, from helper.UInt160, amount int, to helper.UInt160) {
+func (l *Listener) isDepositEvent(notification *models.RpcNotification) (isDeposit bool, requestId uint64, from helper.UInt160, amount int, to helper.UInt160, err error) {
 	if !l.isEvmLayerContract(notification) || notification.EventName != "OnDeposited" {
 		isDeposit = false
 		return
 	}
 	if notification.State.Type != vm.Array.String() {
-		panic("invalid deposited event type")
+		err = errors.New("invalid deposited event type")
+		return
 	}
 	notification.State.Convert()
 	arr := notification.State.Value.([]models.InvokeStack)
 	if len(arr) != 4 {
-		panic("invalid deposited event arguments count")
+		err = errors.New("invalid deposited event arguments count")
+		return
 	}
-	requestId, err := strconv.ParseUint(arr[0].Value.(string), 10, 64)
+	requestId, err = strconv.ParseUint(arr[0].Value.(string), 10, 64)
 	if err != nil {
-		panic(fmt.Errorf("can't parse request id: %w", err))
+		err = fmt.Errorf("can't parse request id: %w", err)
+		return
 	}
 	if arr[1].Type != vm.ByteString.String() {
-		panic("invalid from type in deposit event")
+		err = errors.New("invalid from type in deposit event")
+		return
 	}
 	from = *helper.UInt160FromBytes(arr[1].Value.([]byte))
 	if arr[2].Type != vm.Integer.String() {
@@ -203,37 +222,42 @@ func (l *Listener) isDepositEvent(notification *models.RpcNotification) (isDepos
 	}
 	amount, err = strconv.Atoi(arr[2].Value.(string))
 	if err != nil {
-		panic(fmt.Errorf("can't parse amount: %w", err))
+		err = fmt.Errorf("can't parse amount: %w", err)
+		return
 	}
 	if arr[3].Type != vm.ByteString.String() {
-		panic("invalid to type in deposit event")
+		err = errors.New("invalid to type in deposit event")
+		return
 	}
 	to = *helper.UInt160FromBytes(arr[3].Value.([]byte))
-	return true, requestId, from, amount, to
+	return true, requestId, from, amount, to, nil
 }
 
-func (l *Listener) isDesignateValidatorsEvent(notification *models.RpcNotification) (isDesignated bool, pks []crypto.ECPoint) {
+func (l *Listener) isDesignateValidatorsEvent(notification *models.RpcNotification) (isDesignated bool, pks []crypto.ECPoint, err error) {
 	if !l.isEvmLayerContract(notification) || notification.EventName != "OnValidatorsChanged" {
 		isDesignated = false
 		return
 	}
 	if notification.State.Type != vm.Array.String() {
-		panic("invalid designated event type")
+		err = errors.New("invalid designated event type")
+		return
 	}
 	notification.State.Convert()
 	arr := notification.State.Value.([]models.InvokeStack)
 	pks = make([]crypto.ECPoint, len(arr))
 	for i, p := range arr {
 		if p.Type != vm.ByteString.String() {
-			panic("invalid ecpoint type in deposit event")
+			err = errors.New("invalid ecpoint type in deposit event")
+			return
 		}
-		pt, err := crypto.NewECPointFromBytes(p.Value.([]byte))
+		pt, e := crypto.NewECPointFromBytes(p.Value.([]byte))
 		if err != nil {
-			panic(fmt.Errorf("can't parse ecpoint: %w", err))
+			err = fmt.Errorf("can't parse ecpoint: %w", e)
+			return
 		}
 		pks[i] = *pt
 	}
-	return true, pks
+	return true, pks, nil
 }
 
 func (l *Listener) isEvmLayerContract(notification *models.RpcNotification) bool {
@@ -297,11 +321,11 @@ func (l *Listener) sync(batch *taskBatch) error {
 			key[0] = StateValidatorRole
 			binary.BigEndian.PutUint32(key[1:], v.index)
 		default:
-			panic("unkown task")
+			return errors.New("unkown task")
 		}
 		txproof, err := proveTx(batch.block, t.TxId())
 		if err != nil {
-			panic(fmt.Errorf("can't build tx proof: %w", err))
+			return fmt.Errorf("can't build tx proof: %w", err)
 		}
 		stateproof := l.client.GetProof(stateroot.RootHash, l.config.MainContract, crypto.Base64Encode(key))
 		tx, err := l.invokeStateSync(method, uint32(batch.block.Index), t.TxId(), txproof, stateproof)
