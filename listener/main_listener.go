@@ -1,22 +1,29 @@
 package listener
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math/big"
-	"neo-evm-bridge/config"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/ZhangTao1596/neo-evm-bridge/config"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/ZhangTao1596/neo-evm-bridge/constantclient"
 
 	"github.com/joeqian10/neo3-gogogo/crypto"
 	"github.com/joeqian10/neo3-gogogo/helper"
 	"github.com/joeqian10/neo3-gogogo/mpt"
-	"github.com/joeqian10/neo3-gogogo/rpc"
 	"github.com/joeqian10/neo3-gogogo/rpc/models"
 	"github.com/joeqian10/neo3-gogogo/vm"
+	"github.com/neo-ngd/neo-go/pkg/core/state"
 	"github.com/neo-ngd/neo-go/pkg/core/transaction"
+	"github.com/neo-ngd/neo-go/pkg/rpc/response/result"
+	"github.com/neo-ngd/neo-go/pkg/wallet"
 )
 
 const (
@@ -24,18 +31,19 @@ const (
 	ValidatorsKey          = 0x03
 	StateValidatorRole     = 4
 	RoleManagementContract = "0x49cf4e5378ffcd4dec034fd98a174c5491e395e2"
+	ConnectorContractName  = "Connector"
+	BlockTimeSeconds       = 15
 )
-
-var ()
 
 type Listener struct {
 	config                        *config.Config
 	evmLayerContract              helper.UInt160
 	running                       bool
 	lastHeader                    *models.RpcBlockHeader
-	txPool                        []*transaction.Transaction
 	roleManagementContractAddress *helper.UInt160
 	client                        *constantclient.ConstantClient
+	connector                     *state.NativeContract
+	account                       *wallet.Account
 }
 
 func NewListener(config *config.Config) (*Listener, error) {
@@ -47,10 +55,18 @@ func NewListener(config *config.Config) (*Listener, error) {
 	if err != nil {
 		return nil, err
 	}
+	client := constantclient.New(config.MainSeeds, config.SideSeeds)
+
+	connector := client.GetNativeContract(ConnectorContractName)
+	if connector == nil {
+		return nil, errors.New("can't get connector contract")
+	}
 	return &Listener{
 		config:                        config,
 		evmLayerContract:              *c,
 		roleManagementContractAddress: roleManagement,
+		client:                        client,
+		connector:                     connector,
 	}, nil
 }
 
@@ -59,25 +75,19 @@ func (l *Listener) Stop() {
 }
 
 func (l *Listener) Listen() {
-	const startIndex = 0
-	l.client = l.newRpcClient()
+	const startIndex = uint32(0)
+
 	for i := startIndex; ; {
 		if !l.running {
 			break
 		}
-		blockResp := l.client.GetBlock(fmt.Sprintf("%d", i))
-		if needRetry(blockResp.ErrorResponse) {
-			time.Sleep(time.Second)
-			//retry
-			continue
-		}
-		if isBlockUnreached(blockResp) {
+		block := l.client.GetBlock(i)
+		if block == nil {
 			time.Sleep(15 * time.Second)
 			continue
 		}
-		block := blockResp.Result
 		batch := new(taskBatch)
-		batch.block = &block
+		batch.block = block
 		batch.isJoint = l.isJointHeader(&block.RpcBlockHeader)
 		for _, tx := range block.Tx {
 			txid, err := helper.UInt256FromString(tx.Hash)
@@ -85,12 +95,7 @@ func (l *Listener) Listen() {
 				panic(fmt.Errorf("invalid tx id: %w", err))
 			}
 			applicationlog := l.client.GetApplicationLog(tx.Hash)
-			for needRetry(applicationlog.ErrorResponse) {
-				time.Sleep(time.Second)
-				//retry
-				applicationlog = l.client.GetApplicationLog(tx.Hash)
-			}
-			for _, execution := range applicationlog.Result.Executions {
+			for _, execution := range applicationlog.Executions {
 				if execution.Trigger == "Application" && execution.VMState == "HALT" {
 					for _, notification := range execution.Notifications {
 						if isDeposit, requestId, _, _, _ := l.isDepositEvent(&notification); isDeposit {
@@ -126,20 +131,16 @@ func (l *Listener) Listen() {
 	}
 }
 
-func (l *Listener) newRpcClient() *rpc.RpcClient {
-	client := rpc.NewClient("http://localhost:11332")
-	if client == nil {
-		//try another
-	}
-	return client
-}
-
 func (l *Listener) saveHandled() error {
 	return nil
 }
 
 func (l *Listener) isJointHeader(header *models.RpcBlockHeader) bool {
-	return false
+	if l.lastHeader == nil {
+		block := l.client.GetBlock(uint32(header.Index) - 1)
+		l.lastHeader = &block.RpcBlockHeader
+	}
+	return l.lastHeader.NextConsensus != header.NextConsensus
 }
 
 func (l *Listener) isRoleManagement(notification *models.RpcNotification) bool {
@@ -244,62 +245,171 @@ func (l *Listener) isEvmLayerContract(notification *models.RpcNotification) bool
 }
 
 func (l *Listener) sync(batch *taskBatch) error {
+	transactions := []*types.Transaction{}
 	if batch.isJoint || len(batch.tasks) > 0 {
-		//sync header, synced?
+		header, err := rpcHeaderToBlockHeader(batch.block.RpcBlockHeader)
+		if err != nil {
+			return err
+		}
+		b, err := blockHeaderToBytes(header)
+		if err != nil {
+			return err
+		}
+		tx, err := l.invokeSyncObject("syncHeader", b)
+		if err != nil {
+			return err
+		}
+		transactions = append(transactions, tx)
 	}
 	var stateroot *mpt.StateRoot
 	if len(batch.tasks) > 0 {
-		staterootResp := l.client.GetStateRoot(uint32(batch.block.Index))
-		stateroot = &staterootResp.Result
-		//sync state root synced?
+		stateroot = l.client.GetStateRoot(uint32(batch.block.Index))
+		b, err := staterootToBytes(stateroot)
+		if err != nil {
+			return err
+		}
+		tx, err := l.invokeSyncObject("syncStateRoot", b)
+		if err != nil {
+			return err
+		}
+		transactions = append(transactions, tx)
 	}
-	//send header and stateroot tx and wait a block
+	err := l.commitTransactions(transactions)
+	if err != nil {
+		return err
+	}
+	transactions = transactions[:0]
 	for _, t := range batch.tasks {
+		var (
+			key    []byte
+			method string
+		)
 		switch v := t.(type) {
 		case depositTask:
-			index := batch.block.Index
-			txid := v.txid
-			txProof, err := proveTx(batch.block, txid)
-			if err != nil {
-				panic(fmt.Errorf("can't build tx proof: %w", err))
-			}
-			key := append([]byte{DepositPrefix}, big.NewInt(int64(v.requestId)).Bytes()...)
-			proofResp := l.client.GetProof(stateroot.RootHash, l.config.MainContract, crypto.Base64Encode(key))
-			if needRetry(proofResp.ErrorResponse) {
-				//retry
-			} else if proofResp.HasError() {
-				//panic?
-			}
-
+			method = "requestMint"
+			key = append([]byte{DepositPrefix}, big.NewInt(int64(v.requestId)).Bytes()...)
 		case validatorsDesignateTask:
+			method = "syncValidators"
+			key = []byte{ValidatorsKey}
 		case stateValidatorsChangeTask:
+			method = "syncStateRootValidatorsAddress"
+			key = make([]byte, 5)
+			key[0] = StateValidatorRole
+			binary.BigEndian.PutUint32(key[1:], v.index)
 		default:
 			panic("unkown task")
 		}
+		txproof, err := proveTx(batch.block, t.TxId())
+		if err != nil {
+			panic(fmt.Errorf("can't build tx proof: %w", err))
+		}
+		stateproof := l.client.GetProof(stateroot.RootHash, l.config.MainContract, crypto.Base64Encode(key))
+		tx, err := l.invokeStateSync(method, uint32(batch.block.Index), t.TxId(), txproof, stateproof)
+		if err != nil {
+			return err
+		}
+		transactions = append(transactions, tx)
 	}
-	return nil
+	return l.commitTransactions(transactions)
 }
 
-func proveTx(block *models.RpcBlock, txid *helper.UInt256) ([]byte, error) {
-	return nil, errors.New("unimplement")
+func (l *Listener) invokeSyncObject(method string, object []byte) (*types.Transaction, error) {
+	data, err := l.connector.Abi.Pack(method, object)
+	if err != nil {
+		return nil, err
+	}
+	return l.createEthLayerTransaction(data)
 }
 
-func needRetry(eresp rpc.ErrorResponse) bool {
-	return eresp.NetError != nil
+func (l *Listener) invokeStateSync(method string, index uint32, txid *helper.UInt256, txproof []byte, stateproof []byte) (*types.Transaction, error) {
+	data, err := l.connector.Abi.Pack(method, index, big.NewInt(0).SetBytes(txid.ToByteArray()), txproof, stateproof)
+	if err != nil {
+		return nil, err
+	}
+	return l.createEthLayerTransaction(data)
 }
 
-func isBlockUnreached(resp rpc.GetBlockResponse) bool {
-	return resp.Error.Code == -100 && resp.Error.Message == "Unknown block"
+func (l *Listener) createEthLayerTransaction(data []byte) (*types.Transaction, error) {
+	var err error
+	chainId := l.client.Eth_ChainId()
+	gasPrice := l.client.Eth_GasPrice()
+	nonce := l.client.Eth_GetTransactionCount(l.account.Address)
+	ltx := &types.LegacyTx{
+		Nonce:    nonce,
+		To:       &(l.connector.Address),
+		GasPrice: gasPrice,
+		Value:    big.NewInt(0),
+		Data:     data,
+	}
+	tx := &transaction.EthTx{
+		Transaction: *types.NewTx(ltx),
+	}
+	gas, err := l.client.Eth_EstimateGas(&result.TransactionObject{
+		From:     l.account.Address,
+		To:       tx.To(),
+		GasPrice: tx.GasPrice(),
+		Value:    tx.Value(),
+		Data:     tx.Data(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	ltx.Gas = gas
+	tx.Transaction = *types.NewTx(ltx)
+	err = l.account.SignTx(chainId, transaction.NewTx(tx))
+	if err != nil {
+		return nil, fmt.Errorf("can't sign tx: %w", err)
+	}
+	return &tx.Transaction, nil
+}
+
+func (l *Listener) commitTransactions(transactions []*types.Transaction) error {
+	hashes := make(map[common.Hash]bool, len(transactions))
+	for _, tx := range transactions {
+		b, err := tx.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		h, err := l.client.Eth_SendRawTransaction(b)
+		if err != nil {
+			return err
+		}
+		hashes[h] = false
+	}
+	retry := 3
+	appending := []string{}
+	for retry > 0 {
+		time.Sleep(BlockTimeSeconds * time.Second)
+		appending = appending[:0]
+		for h, s := range hashes {
+			if !s {
+				txResp := l.client.Eth_GetTransactionByHash(h)
+				if txResp != nil {
+					hashes[h] = true
+				} else {
+					appending = append(appending, h.String())
+				}
+			}
+		}
+		if len(appending) == 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("can't commit transactions: [%s]", strings.Join(appending, ","))
 }
 
 type taskBatch struct {
 	block   *models.RpcBlock
 	isJoint bool
-	tasks   []interface{}
+	tasks   []task
 }
 
-func (b *taskBatch) addTask(t interface{}) {
+func (b *taskBatch) addTask(t task) {
 	b.tasks = append(b.tasks, t)
+}
+
+type task interface {
+	TxId() *helper.UInt256
 }
 
 type depositTask struct {
@@ -307,11 +417,23 @@ type depositTask struct {
 	requestId uint64
 }
 
+func (t depositTask) TxId() *helper.UInt256 {
+	return t.txid
+}
+
 type validatorsDesignateTask struct {
 	txid *helper.UInt256
+}
+
+func (t validatorsDesignateTask) TxId() *helper.UInt256 {
+	return t.txid
 }
 
 type stateValidatorsChangeTask struct {
 	txid  *helper.UInt256
 	index uint32
+}
+
+func (t stateValidatorsChangeTask) TxId() *helper.UInt256 {
+	return t.txid
 }
