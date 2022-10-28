@@ -79,7 +79,6 @@ namespace EvmLayerContract
             OnDeposited(id, from, amount, to);
         }
 
-        /// Need test
         public static bool Verify()
         {
             var owner = (UInt160)Storage.Get(Storage.CurrentContext, OwnerKey);
@@ -95,8 +94,14 @@ namespace EvmLayerContract
             var ps = ECPointUnique(pks);
             if (pks.Length != 1 && pks.Length != 4 && pks.Length != 7)// Consistency check with side chain config
                 throw new Exception("invalid validators count");
+            var txHash = ((Transaction)Runtime.ScriptContainer).Hash;
+            var state = new ValidatorsState
+            {
+                TxHash = txHash,
+                Validators = ps,
+            };
+            Storage.Put(Storage.CurrentContext, ValidatorsKey, state.Serialize());
             OnValidatorsChanged(ps);
-            Storage.Put(Storage.CurrentContext, ValidatorsKey, ECPointsSerialize(ps));
         }
 
         private static bool ECPointsCheck(ECPoint[] ps)
@@ -141,54 +146,6 @@ namespace EvmLayerContract
             return r;
         }
 
-        private static byte[] ECPointsSerialize(ECPoint[] ps)
-        {
-            var data = new byte[] { (byte)ps.Length };
-            foreach (var p in ps)
-            {
-                data = BytesAppend(data, (byte)p.Length);
-                data = BytesConcat(data, (byte[])p);
-            }
-            return data;
-        }
-
-        private static ECPoint[] ECPointDeserialize(byte[] data)
-        {
-            if (data.Length < 1) throw new Exception("invalid raw ECPoints");
-            int offset = 0;
-            var count = data[offset++];
-            var r = new ECPoint[count];
-            for (int i = 0; i < count && offset < data.Length; i++)
-            {
-                var len = data[offset++];
-                if (offset + len > data.Length) throw new Exception("unexpected end of bytes");
-                r[i] = (ECPoint)data[offset..(offset + len)];
-                offset += len;
-            }
-            return r;
-        }
-
-        private static byte[] BytesAppend(byte[] a, byte x)
-        {
-            var r = new byte[a.Length + 1];
-            int i = 0;
-            for (; i < a.Length; i++)
-                r[i] = a[i];
-            r[i] = x;
-            return r;
-        }
-
-        private static byte[] BytesConcat(byte[] a, byte[] b)
-        {
-            var r = new byte[a.Length + b.Length];
-            int i = 0;
-            for (; i < a.Length; i++)
-                r[i] = a[i];
-            for (; i < a.Length + b.Length; i++)
-                r[i] = b[i - a.Length];
-            return r;
-        }
-
         public static void Update(ByteString nefFile, string manifest)
         {
             ContractManagement.Update(nefFile, manifest, null);
@@ -204,7 +161,9 @@ namespace EvmLayerContract
             var raw = (byte[])Storage.Get(Storage.CurrentContext, ValidatorsKey);
             if (raw != null && raw.Length > 0)
             {
-                return ECPointDeserialize(raw);
+                var state = new ValidatorsState();
+                state.Deserialize(raw);
+                return state.Validators;
             }
             return new ECPoint[0];
         }

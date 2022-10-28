@@ -3,15 +3,17 @@ package config
 import (
 	"encoding/json"
 	"os"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 type Config struct {
-	MainSeeds    []string `json:"mainSeeds"`
-	SideSeeds    []string `json:"sideSeeds"`
-	Start        int      `json:"start"`
-	ForceStart   bool     `json:"forceStart"`
-	MainContract string   `json:"MainContract"`
-	SideContract string   `json:"SideContract"`
+	MainSeeds    []string       `json:"mainSeeds"`
+	SideSeeds    []string       `json:"sideSeeds"`
+	Start        uint32         `json:"start"`
+	MainContract string         `json:"ainContract"`
+	Wallet       string         `json:"wallet"`
+	Relayer      common.Address `json:"relayer"`
 }
 
 func Load(path string) (*Config, error) {

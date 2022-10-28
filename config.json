@@ -1,0 +1,12 @@
+{
+    "mainSeeds": [
+        "http://localhost:11332"
+    ],
+    "sideSeeds": [
+        "http://localhost:20302"
+    ],
+    "mainContract": "0xcb1a3fc47f773128be05b75c5de316b2d721980e",
+    "start": 9169,
+    "wallet": "w.json",
+    "relayer": "0x889bc4986d3aa69500525dc9ca4373615389c9a1"
+}

@@ -1,9 +1,10 @@
-package listener
+package relay
 
 import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"math/big"
 	"strconv"
 	"strings"
@@ -35,10 +36,9 @@ const (
 	BlockTimeSeconds       = 15
 )
 
-type Listener struct {
+type Relayer struct {
 	config                        *config.Config
 	evmLayerContract              helper.UInt160
-	running                       bool
 	lastHeader                    *models.RpcBlockHeader
 	roleManagementContractAddress *helper.UInt160
 	client                        *constantclient.ConstantClient
@@ -46,7 +46,7 @@ type Listener struct {
 	account                       *wallet.Account
 }
 
-func NewListener(config *config.Config) (*Listener, error) {
+func NewRelayer(config *config.Config, acc *wallet.Account) (*Relayer, error) {
 	c, err := helper.UInt160FromString(config.MainContract)
 	if err != nil {
 		return nil, err
@@ -61,26 +61,20 @@ func NewListener(config *config.Config) (*Listener, error) {
 	if connector == nil {
 		return nil, errors.New("can't get connector contract")
 	}
-	return &Listener{
+
+	return &Relayer{
 		config:                        config,
 		evmLayerContract:              *c,
 		roleManagementContractAddress: roleManagement,
 		client:                        client,
 		connector:                     connector,
+		account:                       acc,
 	}, nil
 }
 
-func (l *Listener) Stop() {
-	l.running = false
-}
-
-func (l *Listener) Listen() {
-	const startIndex = uint32(0)
-
-	for i := startIndex; ; {
-		if !l.running {
-			break
-		}
+func (l *Relayer) Run() {
+	for i := l.config.Start; ; {
+		log.Printf("syncing block, index=%d", i)
 		block := l.client.GetBlock(i)
 		if block == nil {
 			time.Sleep(15 * time.Second)
@@ -90,6 +84,7 @@ func (l *Listener) Listen() {
 		batch.block = block
 		batch.isJoint = l.isJointHeader(&block.RpcBlockHeader)
 		for _, tx := range block.Tx {
+			log.Printf("syncing tx, hash=%s\n", tx.Hash)
 			txid, err := helper.UInt256FromString(tx.Hash)
 			if err != nil {
 				panic(fmt.Errorf("invalid tx id: %w", err))
@@ -98,21 +93,23 @@ func (l *Listener) Listen() {
 			for _, execution := range applicationlog.Executions {
 				if execution.Trigger == "Application" && execution.VMState == "HALT" {
 					for _, notification := range execution.Notifications {
-						isDeposit, requestId, _, _, _, err := l.isDepositEvent(&notification)
+						isDeposit, requestId, from, amount, to, err := l.isDepositEvent(&notification)
 						if err != nil {
 							panic(err)
 						}
 						if isDeposit {
+							log.Printf("deposit event, id=%d, from=%s, amount=%d, to=%s\n", requestId, from, amount, to)
 							batch.addTask(depositTask{
 								txid:      txid,
 								requestId: requestId,
 							})
 						} else {
-							isDesignate, _, err := l.isDesignateValidatorsEvent(&notification)
+							isDesignate, pks, err := l.isDesignateValidatorsEvent(&notification)
 							if err != nil {
 								panic(err)
 							}
 							if isDesignate {
+								log.Printf("designate event, pks=%s\n", pks)
 								batch.addTask(validatorsDesignateTask{
 									txid: txid,
 								})
@@ -122,6 +119,7 @@ func (l *Listener) Listen() {
 									panic(err)
 								}
 								if isStateValidatorsDesignate {
+									log.Printf("state validators designate event, index=%d\n", index)
 									batch.addTask(stateValidatorsChangeTask{
 										txid:  txid,
 										index: index,
@@ -146,19 +144,19 @@ func (l *Listener) Listen() {
 	}
 }
 
-func (l *Listener) saveHandled() error {
+func (l *Relayer) saveHandled() error {
 	return nil
 }
 
-func (l *Listener) isJointHeader(header *models.RpcBlockHeader) bool {
-	if l.lastHeader == nil {
+func (l *Relayer) isJointHeader(header *models.RpcBlockHeader) bool {
+	if l.lastHeader == nil && header.Index > 0 {
 		block := l.client.GetBlock(uint32(header.Index) - 1)
 		l.lastHeader = &block.RpcBlockHeader
 	}
-	return l.lastHeader.NextConsensus != header.NextConsensus
+	return header.Index == 0 || l.lastHeader.NextConsensus != header.NextConsensus
 }
 
-func (l *Listener) isRoleManagement(notification *models.RpcNotification) bool {
+func (l *Relayer) isRoleManagement(notification *models.RpcNotification) bool {
 	contractInNotication, err := helper.UInt160FromString(notification.Contract)
 	if err != nil {
 		return false
@@ -166,7 +164,7 @@ func (l *Listener) isRoleManagement(notification *models.RpcNotification) bool {
 	return *contractInNotication == *l.roleManagementContractAddress
 }
 
-func (l *Listener) isStateValidatorsDesignatedEvent(notification *models.RpcNotification) (bool, uint32, error) {
+func (l *Relayer) isStateValidatorsDesignatedEvent(notification *models.RpcNotification) (bool, uint32, error) {
 	if !l.isRoleManagement(notification) || notification.EventName != "Designation" {
 		return false, 0, nil
 	}
@@ -192,7 +190,7 @@ func (l *Listener) isStateValidatorsDesignatedEvent(notification *models.RpcNoti
 	return true, uint32(index), nil
 }
 
-func (l *Listener) isDepositEvent(notification *models.RpcNotification) (isDeposit bool, requestId uint64, from helper.UInt160, amount int, to helper.UInt160, err error) {
+func (l *Relayer) isDepositEvent(notification *models.RpcNotification) (isDeposit bool, requestId uint64, from helper.UInt160, amount int, to helper.UInt160, err error) {
 	if !l.isEvmLayerContract(notification) || notification.EventName != "OnDeposited" {
 		isDeposit = false
 		return
@@ -216,7 +214,12 @@ func (l *Listener) isDepositEvent(notification *models.RpcNotification) (isDepos
 		err = errors.New("invalid from type in deposit event")
 		return
 	}
-	from = *helper.UInt160FromBytes(arr[1].Value.([]byte))
+	bf, err := crypto.Base64Decode(arr[1].Value.(string))
+	if err != nil {
+		err = fmt.Errorf("can't parse from: %w", err)
+		return
+	}
+	from = *helper.UInt160FromBytes(bf)
 	if arr[2].Type != vm.Integer.String() {
 		panic("invalid amount type in deposit event")
 	}
@@ -229,11 +232,17 @@ func (l *Listener) isDepositEvent(notification *models.RpcNotification) (isDepos
 		err = errors.New("invalid to type in deposit event")
 		return
 	}
-	to = *helper.UInt160FromBytes(arr[3].Value.([]byte))
+	bt, err := crypto.Base64Decode(arr[3].Value.(string))
+	if err != nil {
+		err = fmt.Errorf("can't parse to: %w", err)
+		return
+	}
+	to = *helper.UInt160FromBytes(bt)
 	return true, requestId, from, amount, to, nil
 }
 
-func (l *Listener) isDesignateValidatorsEvent(notification *models.RpcNotification) (isDesignated bool, pks []crypto.ECPoint, err error) {
+func (l *Relayer) isDesignateValidatorsEvent(notification *models.RpcNotification) (isDesignated bool, pks []crypto.ECPoint, err error) {
+	fmt.Println(notification)
 	if !l.isEvmLayerContract(notification) || notification.EventName != "OnValidatorsChanged" {
 		isDesignated = false
 		return
@@ -260,7 +269,7 @@ func (l *Listener) isDesignateValidatorsEvent(notification *models.RpcNotificati
 	return true, pks, nil
 }
 
-func (l *Listener) isEvmLayerContract(notification *models.RpcNotification) bool {
+func (l *Relayer) isEvmLayerContract(notification *models.RpcNotification) bool {
 	contractInNotication, err := helper.UInt160FromString(notification.Contract)
 	if err != nil {
 		return false
@@ -268,20 +277,22 @@ func (l *Listener) isEvmLayerContract(notification *models.RpcNotification) bool
 	return *contractInNotication == l.evmLayerContract
 }
 
-func (l *Listener) sync(batch *taskBatch) error {
+func (l *Relayer) sync(batch *taskBatch) error {
 	transactions := []*types.Transaction{}
 	if batch.isJoint || len(batch.tasks) > 0 {
 		header, err := rpcHeaderToBlockHeader(batch.block.RpcBlockHeader)
+		fmt.Println(1.1)
 		if err != nil {
 			return err
 		}
 		b, err := blockHeaderToBytes(header)
 		if err != nil {
-			return err
+			return fmt.Errorf("can't encode block header: %w", err)
 		}
 		tx, err := l.invokeSyncObject("syncHeader", b)
+		fmt.Println(1.3)
 		if err != nil {
-			return err
+			return fmt.Errorf("can't sync object: %w", err)
 		}
 		transactions = append(transactions, tx)
 	}
@@ -290,11 +301,11 @@ func (l *Listener) sync(batch *taskBatch) error {
 		stateroot = l.client.GetStateRoot(uint32(batch.block.Index))
 		b, err := staterootToBytes(stateroot)
 		if err != nil {
-			return err
+			return fmt.Errorf("can't encode stateroot: %w", err)
 		}
 		tx, err := l.invokeSyncObject("syncStateRoot", b)
 		if err != nil {
-			return err
+			return fmt.Errorf("can't sync object: %w", err)
 		}
 		transactions = append(transactions, tx)
 	}
@@ -337,15 +348,15 @@ func (l *Listener) sync(batch *taskBatch) error {
 	return l.commitTransactions(transactions)
 }
 
-func (l *Listener) invokeSyncObject(method string, object []byte) (*types.Transaction, error) {
+func (l *Relayer) invokeSyncObject(method string, object []byte) (*types.Transaction, error) {
 	data, err := l.connector.Abi.Pack(method, object)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("can't pack sync object, method=%s: %w", method, err)
 	}
 	return l.createEthLayerTransaction(data)
 }
 
-func (l *Listener) invokeStateSync(method string, index uint32, txid *helper.UInt256, txproof []byte, stateproof []byte) (*types.Transaction, error) {
+func (l *Relayer) invokeStateSync(method string, index uint32, txid *helper.UInt256, txproof []byte, stateproof []byte) (*types.Transaction, error) {
 	data, err := l.connector.Abi.Pack(method, index, big.NewInt(0).SetBytes(txid.ToByteArray()), txproof, stateproof)
 	if err != nil {
 		return nil, err
@@ -353,10 +364,11 @@ func (l *Listener) invokeStateSync(method string, index uint32, txid *helper.UIn
 	return l.createEthLayerTransaction(data)
 }
 
-func (l *Listener) createEthLayerTransaction(data []byte) (*types.Transaction, error) {
+func (l *Relayer) createEthLayerTransaction(data []byte) (*types.Transaction, error) {
 	var err error
 	chainId := l.client.Eth_ChainId()
 	gasPrice := l.client.Eth_GasPrice()
+	fmt.Println(l.connector.Address)
 	nonce := l.client.Eth_GetTransactionCount(l.account.Address)
 	ltx := &types.LegacyTx{
 		Nonce:    nonce,
@@ -387,7 +399,10 @@ func (l *Listener) createEthLayerTransaction(data []byte) (*types.Transaction, e
 	return &tx.Transaction, nil
 }
 
-func (l *Listener) commitTransactions(transactions []*types.Transaction) error {
+func (l *Relayer) commitTransactions(transactions []*types.Transaction) error {
+	if len(transactions) == 0 {
+		return nil
+	}
 	hashes := make(map[common.Hash]bool, len(transactions))
 	for _, tx := range transactions {
 		b, err := tx.MarshalBinary()

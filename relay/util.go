@@ -1,4 +1,4 @@
-package listener
+package relay
 
 import (
 	"encoding/binary"
@@ -39,7 +39,7 @@ func proveTx(block *models.RpcBlock, txid *helper.UInt256) ([]byte, error) {
 }
 
 func rpcHeaderToBlockHeader(h models.RpcBlockHeader) (*block.Header, error) {
-	nonce, err := strconv.ParseUint(h.Nonce, 10, 8)
+	nonce, err := strconv.ParseUint(h.Nonce, 16, 64)
 	if err != nil {
 		return nil, fmt.Errorf("can't parse nonce in header: %w", err)
 	}
@@ -75,11 +75,17 @@ func rpcHeaderToBlockHeader(h models.RpcBlockHeader) (*block.Header, error) {
 func blockHeaderToBytes(header *block.Header) ([]byte, error) {
 	writer := nio.NewBufBinWriter()
 	header.EncodeBinary(writer.BinWriter)
-	return writer.Bytes(), writer.Err
+	if writer.Err != nil {
+		return nil, writer.Err
+	}
+	return writer.Bytes(), nil
 }
 
 func staterootToBytes(stateroot *mpt.StateRoot) ([]byte, error) {
 	writer := io.NewBufBinaryWriter()
 	stateroot.Serialize(writer.BinaryWriter)
-	return writer.Bytes(), writer.Err
+	if writer.Err != nil {
+		return nil, writer.Err
+	}
+	return writer.Bytes(), nil
 }
