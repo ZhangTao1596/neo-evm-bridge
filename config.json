@@ -5,8 +5,9 @@
     "sideSeeds": [
         "http://localhost:20302"
     ],
-    "mainContract": "0xcb1a3fc47f773128be05b75c5de316b2d721980e",
-    "start": 9169,
+    "manageContract": "0x1929b47bdf93ab3350c8cb01614359623ce196d6",
+    "start": 98,
+    "end": 1000,
     "wallet": "w.json",
     "relayer": "0x889bc4986d3aa69500525dc9ca4373615389c9a1"
 }

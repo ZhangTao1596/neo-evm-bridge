@@ -12,34 +12,13 @@ namespace EvmLayerContract
         public byte[] Serialize()
         {
             var data = (byte[])TxHash;
-            data = BytesAppend(data, (byte)Validators.Length);
+            data = Helper.BytesAppend(data, (byte)Validators.Length);
             foreach (var p in Validators)
             {
-                data = BytesAppend(data, (byte)p.Length);
-                data = BytesConcat(data, (byte[])p);
+                data = Helper.BytesAppend(data, (byte)p.Length);
+                data = Helper.BytesConcat(data, (byte[])p);
             }
             return data;
-        }
-
-        private byte[] BytesAppend(byte[] a, byte x)
-        {
-            var r = new byte[a.Length + 1];
-            int i = 0;
-            for (; i < a.Length; i++)
-                r[i] = a[i];
-            r[i] = x;
-            return r;
-        }
-
-        private byte[] BytesConcat(byte[] a, byte[] b)
-        {
-            var r = new byte[a.Length + b.Length];
-            int i = 0;
-            for (; i < a.Length; i++)
-                r[i] = a[i];
-            for (; i < a.Length + b.Length; i++)
-                r[i] = b[i - a.Length];
-            return r;
         }
 
         public ECPoint[] Deserialize(byte[] data)

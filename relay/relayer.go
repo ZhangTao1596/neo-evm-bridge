@@ -13,6 +13,7 @@ import (
 	"github.com/ZhangTao1596/neo-evm-bridge/config"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"golang.org/x/exp/maps"
 
 	"github.com/ZhangTao1596/neo-evm-bridge/constantclient"
 
@@ -28,43 +29,43 @@ import (
 )
 
 const (
-	DepositPrefix          = 0x01
-	ValidatorsKey          = 0x03
-	StateValidatorRole     = 4
-	RoleManagementContract = "0x49cf4e5378ffcd4dec034fd98a174c5491e395e2"
-	ConnectorContractName  = "Connector"
-	BlockTimeSeconds       = 15
+	DepositPrefix                           = 0x01
+	ValidatorsKey                           = 0x03
+	StateValidatorRole                      = 4
+	RoleManagementContract                  = "0x49cf4e5378ffcd4dec034fd98a174c5491e395e2"
+	ConnectorContractName                   = "Connector"
+	ConnectorSyncHeader                     = "syncHeader"
+	ConnectorSyncStateRoot                  = "syncStateRoot"
+	ConnectorSyncValidators                 = "syncValidators"
+	ConnectorSyncStateRootValidatorsAddress = "syncStateRootValidatorsAddress"
+	ConnectorRequestMint                    = "requestMint"
+	BlockTimeSeconds                        = 15
+	MaxStateRootTryCount                    = 1000
+	ConnectorAlreadySyncedError             = "already synced"
 )
 
 type Relayer struct {
-	config                        *config.Config
-	evmLayerContract              helper.UInt160
+	cfg                           *config.Config
 	lastHeader                    *models.RpcBlockHeader
+	lastStateRoot                 *mpt.StateRoot
 	roleManagementContractAddress *helper.UInt160
 	client                        *constantclient.ConstantClient
 	connector                     *state.NativeContract
 	account                       *wallet.Account
 }
 
-func NewRelayer(config *config.Config, acc *wallet.Account) (*Relayer, error) {
-	c, err := helper.UInt160FromString(config.MainContract)
-	if err != nil {
-		return nil, err
-	}
+func NewRelayer(cfg *config.Config, acc *wallet.Account) (*Relayer, error) {
 	roleManagement, err := helper.UInt160FromString(RoleManagementContract)
 	if err != nil {
 		return nil, err
 	}
-	client := constantclient.New(config.MainSeeds, config.SideSeeds)
-
+	client := constantclient.New(cfg.MainSeeds, cfg.SideSeeds)
 	connector := client.GetNativeContract(ConnectorContractName)
 	if connector == nil {
 		return nil, errors.New("can't get connector contract")
 	}
-
 	return &Relayer{
-		config:                        config,
-		evmLayerContract:              *c,
+		cfg:                           cfg,
 		roleManagementContractAddress: roleManagement,
 		client:                        client,
 		connector:                     connector,
@@ -73,7 +74,7 @@ func NewRelayer(config *config.Config, acc *wallet.Account) (*Relayer, error) {
 }
 
 func (l *Relayer) Run() {
-	for i := l.config.Start; ; {
+	for i := l.cfg.Start; i < l.cfg.End; {
 		log.Printf("syncing block, index=%d", i)
 		block := l.client.GetBlock(i)
 		if block == nil {
@@ -85,10 +86,6 @@ func (l *Relayer) Run() {
 		batch.isJoint = l.isJointHeader(&block.RpcBlockHeader)
 		for _, tx := range block.Tx {
 			log.Printf("syncing tx, hash=%s\n", tx.Hash)
-			txid, err := helper.UInt256FromString(tx.Hash)
-			if err != nil {
-				panic(fmt.Errorf("invalid tx id: %w", err))
-			}
 			applicationlog := l.client.GetApplicationLog(tx.Hash)
 			for _, execution := range applicationlog.Executions {
 				if execution.Trigger == "Application" && execution.VMState == "HALT" {
@@ -100,7 +97,7 @@ func (l *Relayer) Run() {
 						if isDeposit {
 							log.Printf("deposit event, id=%d, from=%s, amount=%d, to=%s\n", requestId, from, amount, to)
 							batch.addTask(depositTask{
-								txid:      txid,
+								txid:      tx.Hash,
 								requestId: requestId,
 							})
 						} else {
@@ -109,9 +106,9 @@ func (l *Relayer) Run() {
 								panic(err)
 							}
 							if isDesignate {
-								log.Printf("designate event, pks=%s\n", pks)
+								log.Printf("validators designate event, pks=%s\n", pks)
 								batch.addTask(validatorsDesignateTask{
-									txid: txid,
+									txid: tx.Hash,
 								})
 							} else {
 								isStateValidatorsDesignate, index, err := l.isStateValidatorsDesignatedEvent(&notification)
@@ -121,7 +118,7 @@ func (l *Relayer) Run() {
 								if isStateValidatorsDesignate {
 									log.Printf("state validators designate event, index=%d\n", index)
 									batch.addTask(stateValidatorsChangeTask{
-										txid:  txid,
+										txid:  tx.Hash,
 										index: index,
 									})
 								}
@@ -191,7 +188,7 @@ func (l *Relayer) isStateValidatorsDesignatedEvent(notification *models.RpcNotif
 }
 
 func (l *Relayer) isDepositEvent(notification *models.RpcNotification) (isDeposit bool, requestId uint64, from helper.UInt160, amount int, to helper.UInt160, err error) {
-	if !l.isEvmLayerContract(notification) || notification.EventName != "OnDeposited" {
+	if !l.isManageContract(notification) || notification.EventName != "OnDeposited" {
 		isDeposit = false
 		return
 	}
@@ -242,8 +239,7 @@ func (l *Relayer) isDepositEvent(notification *models.RpcNotification) (isDeposi
 }
 
 func (l *Relayer) isDesignateValidatorsEvent(notification *models.RpcNotification) (isDesignated bool, pks []crypto.ECPoint, err error) {
-	fmt.Println(notification)
-	if !l.isEvmLayerContract(notification) || notification.EventName != "OnValidatorsChanged" {
+	if !l.isManageContract(notification) || notification.EventName != "OnValidatorsChanged" {
 		isDesignated = false
 		return
 	}
@@ -252,14 +248,24 @@ func (l *Relayer) isDesignateValidatorsEvent(notification *models.RpcNotificatio
 		return
 	}
 	notification.State.Convert()
-	arr := notification.State.Value.([]models.InvokeStack)
+	args := notification.State.Value.([]models.InvokeStack)
+	if len(args) != 1 {
+		err = errors.New("invalid validators change arguments count")
+		return
+	}
+	arr := args[0].Value.([]models.InvokeStack)
 	pks = make([]crypto.ECPoint, len(arr))
 	for i, p := range arr {
 		if p.Type != vm.ByteString.String() {
-			err = errors.New("invalid ecpoint type in deposit event")
+			err = errors.New("invalid ecpoint type in validators change event")
 			return
 		}
-		pt, e := crypto.NewECPointFromBytes(p.Value.([]byte))
+		pkb, e := crypto.Base64Decode(p.Value.(string))
+		if e != nil {
+			err = fmt.Errorf("can't parse ecpoint base64: %w", e)
+			return
+		}
+		pt, e := crypto.NewECPointFromBytes(pkb)
 		if err != nil {
 			err = fmt.Errorf("can't parse ecpoint: %w", e)
 			return
@@ -269,19 +275,14 @@ func (l *Relayer) isDesignateValidatorsEvent(notification *models.RpcNotificatio
 	return true, pks, nil
 }
 
-func (l *Relayer) isEvmLayerContract(notification *models.RpcNotification) bool {
-	contractInNotication, err := helper.UInt160FromString(notification.Contract)
-	if err != nil {
-		return false
-	}
-	return *contractInNotication == l.evmLayerContract
+func (l *Relayer) isManageContract(notification *models.RpcNotification) bool {
+	return notification.Contract == l.cfg.ManageContract
 }
 
 func (l *Relayer) sync(batch *taskBatch) error {
 	transactions := []*types.Transaction{}
 	if batch.isJoint || len(batch.tasks) > 0 {
 		header, err := rpcHeaderToBlockHeader(batch.block.RpcBlockHeader)
-		fmt.Println(1.1)
 		if err != nil {
 			return err
 		}
@@ -289,25 +290,54 @@ func (l *Relayer) sync(batch *taskBatch) error {
 		if err != nil {
 			return fmt.Errorf("can't encode block header: %w", err)
 		}
-		tx, err := l.invokeSyncObject("syncHeader", b)
-		fmt.Println(1.3)
+		tx, err := l.invokeSyncObject(ConnectorSyncHeader, b)
 		if err != nil {
-			return fmt.Errorf("can't sync object: %w", err)
+			if strings.Contains(err.Error(), ConnectorAlreadySyncedError) {
+				log.Println("skip synced header")
+			} else {
+				return fmt.Errorf("can't %s, header=%s, h=%s,: %w", ConnectorSyncHeader, batch.block.Hash, header.Hash(), err)
+			}
+		} else {
+			log.Printf("%s tx, txid=%s\n", ConnectorSyncHeader, batch.block.Hash)
+			transactions = append(transactions, tx)
 		}
-		transactions = append(transactions, tx)
+
 	}
 	var stateroot *mpt.StateRoot
 	if len(batch.tasks) > 0 {
-		stateroot = l.client.GetStateRoot(uint32(batch.block.Index))
-		b, err := staterootToBytes(stateroot)
-		if err != nil {
-			return fmt.Errorf("can't encode stateroot: %w", err)
+		if l.lastStateRoot != nil && l.lastStateRoot.Index >= uint32(batch.block.Index) {
+			stateroot = l.lastStateRoot
+		} else {
+			for stateIndex := uint32(batch.block.Index); stateIndex < uint32(batch.block.Index)+MaxStateRootTryCount; {
+				stateroot = l.client.GetStateRoot(stateIndex)
+				if stateroot == nil {
+					return errors.New("can't get state root")
+				}
+				if len(stateroot.Witnesses) == 0 {
+					log.Printf("unverified state root, index=%d", batch.block.Index)
+					continue
+				}
+				l.lastStateRoot = stateroot
+				b, err := staterootToBytes(stateroot)
+				if err != nil {
+					return fmt.Errorf("can't encode stateroot: %w", err)
+				}
+				tx, err := l.invokeSyncObject(ConnectorSyncStateRoot, b)
+				if err != nil {
+					if strings.Contains(err.Error(), ConnectorAlreadySyncedError) {
+						log.Println("skip synced state root")
+					} else {
+						return fmt.Errorf("can't sync state root: %w", err)
+					}
+				} else {
+					log.Printf("%s tx, txid=%s\n", ConnectorSyncStateRoot, tx.Hash())
+					transactions = append(transactions, tx)
+				}
+			}
+			if stateroot == nil {
+				return errors.New("can't get verified state root")
+			}
 		}
-		tx, err := l.invokeSyncObject("syncStateRoot", b)
-		if err != nil {
-			return fmt.Errorf("can't sync object: %w", err)
-		}
-		transactions = append(transactions, tx)
 	}
 	err := l.commitTransactions(transactions)
 	if err != nil {
@@ -321,13 +351,13 @@ func (l *Relayer) sync(batch *taskBatch) error {
 		)
 		switch v := t.(type) {
 		case depositTask:
-			method = "requestMint"
+			method = ConnectorRequestMint
 			key = append([]byte{DepositPrefix}, big.NewInt(int64(v.requestId)).Bytes()...)
 		case validatorsDesignateTask:
-			method = "syncValidators"
+			method = ConnectorSyncValidators
 			key = []byte{ValidatorsKey}
 		case stateValidatorsChangeTask:
-			method = "syncStateRootValidatorsAddress"
+			method = ConnectorSyncStateRootValidatorsAddress
 			key = make([]byte, 5)
 			key[0] = StateValidatorRole
 			binary.BigEndian.PutUint32(key[1:], v.index)
@@ -338,11 +368,24 @@ func (l *Relayer) sync(batch *taskBatch) error {
 		if err != nil {
 			return fmt.Errorf("can't build tx proof: %w", err)
 		}
-		stateproof := l.client.GetProof(stateroot.RootHash, l.config.MainContract, crypto.Base64Encode(key))
-		tx, err := l.invokeStateSync(method, uint32(batch.block.Index), t.TxId(), txproof, stateproof)
+		stateproof := l.client.GetProof(stateroot.RootHash, l.cfg.ManageContract, crypto.Base64Encode(key))
+		tx, err := l.invokeStateSync(method, uint32(batch.block.Index), t.TxId(), txproof, stateroot.Index, stateproof)
 		if err != nil {
+			if strings.Contains(err.Error(), "already synced") {
+				log.Printf("%s skip synced\n", method)
+				continue
+			}
+			if method == ConnectorSyncValidators && strings.Contains(err.Error(), "synced validators outdated") {
+				log.Printf("%s skip synced validators", method)
+				continue
+			}
+			if method == ConnectorRequestMint && strings.Contains(err.Error(), "already minted") {
+				log.Printf("%s skip synced mint", method)
+				continue
+			}
 			return err
 		}
+		log.Printf("%s tx, txid=%s\n", method, tx.Hash())
 		transactions = append(transactions, tx)
 	}
 	return l.commitTransactions(transactions)
@@ -356,8 +399,12 @@ func (l *Relayer) invokeSyncObject(method string, object []byte) (*types.Transac
 	return l.createEthLayerTransaction(data)
 }
 
-func (l *Relayer) invokeStateSync(method string, index uint32, txid *helper.UInt256, txproof []byte, stateproof []byte) (*types.Transaction, error) {
-	data, err := l.connector.Abi.Pack(method, index, big.NewInt(0).SetBytes(txid.ToByteArray()), txproof, stateproof)
+func (l *Relayer) invokeStateSync(method string, index uint32, txid string, txproof []byte, rootIndex uint32, stateproof []byte) (*types.Transaction, error) {
+	h, err := helper.UInt256FromString(txid)
+	if err != nil {
+		return nil, fmt.Errorf("can't parse txid: %w", err)
+	}
+	data, err := l.connector.Abi.Pack(method, index, big.NewInt(0).SetBytes(common.BytesToHash(h.ToByteArray()).Bytes()), txproof, rootIndex, stateproof)
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +415,6 @@ func (l *Relayer) createEthLayerTransaction(data []byte) (*types.Transaction, er
 	var err error
 	chainId := l.client.Eth_ChainId()
 	gasPrice := l.client.Eth_GasPrice()
-	fmt.Println(l.connector.Address)
 	nonce := l.client.Eth_GetTransactionCount(l.account.Address)
 	ltx := &types.LegacyTx{
 		Nonce:    nonce,
@@ -431,8 +477,10 @@ func (l *Relayer) commitTransactions(transactions []*types.Transaction) error {
 			}
 		}
 		if len(appending) == 0 {
+			log.Printf("txes committed: %s\n", maps.Keys(hashes))
 			return nil
 		}
+		retry--
 	}
 	return fmt.Errorf("can't commit transactions: [%s]", strings.Join(appending, ","))
 }
@@ -448,31 +496,31 @@ func (b *taskBatch) addTask(t task) {
 }
 
 type task interface {
-	TxId() *helper.UInt256
+	TxId() string
 }
 
 type depositTask struct {
-	txid      *helper.UInt256
+	txid      string
 	requestId uint64
 }
 
-func (t depositTask) TxId() *helper.UInt256 {
+func (t depositTask) TxId() string {
 	return t.txid
 }
 
 type validatorsDesignateTask struct {
-	txid *helper.UInt256
+	txid string
 }
 
-func (t validatorsDesignateTask) TxId() *helper.UInt256 {
+func (t validatorsDesignateTask) TxId() string {
 	return t.txid
 }
 
 type stateValidatorsChangeTask struct {
-	txid  *helper.UInt256
+	txid  string
 	index uint32
 }
 
-func (t stateValidatorsChangeTask) TxId() *helper.UInt256 {
+func (t stateValidatorsChangeTask) TxId() string {
 	return t.txid
 }

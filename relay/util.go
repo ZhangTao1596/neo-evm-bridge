@@ -17,16 +17,24 @@ import (
 	nio "github.com/neo-ngd/neo-go/pkg/io"
 )
 
-func proveTx(block *models.RpcBlock, txid *helper.UInt256) ([]byte, error) {
+func proveTx(block *models.RpcBlock, txid string) ([]byte, error) {
 	hashes := make([]common.Hash, len(block.Tx))
 	for i, tx := range block.Tx {
-		hashes[i] = common.HexToHash(tx.Hash)
+		h, err := helper.UInt256FromString(tx.Hash)
+		if err != nil {
+			return nil, fmt.Errorf("can't parse tx hash in header: %w", err)
+		}
+		hashes[i] = common.BytesToHash(h.ToByteArray())
 	}
 	tree, err := hash.NewMerkleTree(hashes)
 	if err != nil {
 		return nil, err
 	}
-	proofs, path, err := tree.Prove(common.BytesToHash(txid.ToByteArray()))
+	h, err := helper.UInt256FromString(txid)
+	if err != nil {
+		return nil, fmt.Errorf("can't parse tx hash in header: %w", err)
+	}
+	proofs, path, err := tree.Prove(common.BytesToHash(h.ToByteArray()))
 	if err != nil {
 		return nil, err
 	}
@@ -55,10 +63,18 @@ func rpcHeaderToBlockHeader(h models.RpcBlockHeader) (*block.Header, error) {
 	if err != nil {
 		return nil, fmt.Errorf("can't parse invocation in header: %w", err)
 	}
+	preHash, err := helper.UInt256FromString(h.PreviousBlockHash)
+	if err != nil {
+		return nil, fmt.Errorf("can't parse prehash in header: %w", err)
+	}
+	merkleRoot, err := helper.UInt256FromString(h.MerkleRoot)
+	if err != nil {
+		return nil, fmt.Errorf("can't parse merkle root in header: %w", err)
+	}
 	header := block.Header{
 		Version:       uint32(h.Version),
-		PrevHash:      common.HexToHash(h.PreviousBlockHash),
-		MerkleRoot:    common.HexToHash(h.MerkleRoot),
+		PrevHash:      common.BytesToHash(preHash.ToByteArray()),
+		MerkleRoot:    common.BytesToHash(merkleRoot.ToByteArray()),
 		Timestamp:     uint64(h.Time),
 		Nonce:         nonce,
 		Index:         uint32(h.Index),

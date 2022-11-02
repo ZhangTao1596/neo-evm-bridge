@@ -71,12 +71,12 @@ func (c *ConstantClient) ensureRequestMain(doRequest func(*rpc.RpcClient) (*rpc.
 	return r
 }
 
-func (c *ConstantClient) ensureRequestSide(doRequest func(*client.Client) (interface{}, error), alwaysRetry bool) (interface{}, error) {
+func (c *ConstantClient) ensureRequestSide(doRequest func(*client.Client) (interface{}, error), resultExpected bool) (interface{}, error) {
 	for {
 		r, err := doRequest(c.sClient)
 		if err != nil {
 			respe, ok := err.(*response.Error)
-			if alwaysRetry || !ok {
+			if resultExpected || !ok {
 				c.newClient(false)
 				continue
 			} else {
@@ -195,5 +195,8 @@ func (c *ConstantClient) Eth_SendRawTransaction(rawTx []byte) (common.Hash, erro
 }
 
 func (c *ConstantClient) Eth_GetTransactionByHash(hash common.Hash) *result.TransactionOutputRaw {
-	return nil
+	r, _ := c.ensureRequestSide(func(client *client.Client) (interface{}, error) {
+		return client.Eth_GetTransactionByHash(hash)
+	}, true)
+	return r.(*result.TransactionOutputRaw)
 }

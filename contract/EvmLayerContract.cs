@@ -75,7 +75,7 @@ namespace EvmLayerContract
                 To = to,
             };
             var id = NewDepositId();
-            depositedMap.Put((ByteString)id, StdLib.Serialize(state));
+            depositedMap.Put((ByteString)id, (ByteString)state.Serialize());
             OnDeposited(id, from, amount, to);
         }
 
