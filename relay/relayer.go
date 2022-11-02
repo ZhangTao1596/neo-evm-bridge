@@ -32,6 +32,9 @@ const (
 	DepositPrefix                           = 0x01
 	ValidatorsKey                           = 0x03
 	StateValidatorRole                      = 4
+	BlockTimeSeconds                        = 15
+	MaxStateRootTryCount                    = 1000
+	MintThreshold                           = 100000000
 	RoleManagementContract                  = "0x49cf4e5378ffcd4dec034fd98a174c5491e395e2"
 	ConnectorContractName                   = "Connector"
 	ConnectorSyncHeader                     = "syncHeader"
@@ -39,8 +42,6 @@ const (
 	ConnectorSyncValidators                 = "syncValidators"
 	ConnectorSyncStateRootValidatorsAddress = "syncStateRootValidatorsAddress"
 	ConnectorRequestMint                    = "requestMint"
-	BlockTimeSeconds                        = 15
-	MaxStateRootTryCount                    = 1000
 	ConnectorAlreadySyncedError             = "already synced"
 )
 
@@ -96,6 +97,10 @@ func (l *Relayer) Run() {
 						}
 						if isDeposit {
 							log.Printf("deposit event, id=%d, from=%s, amount=%d, to=%s\n", requestId, from, amount, to)
+							if amount < MintThreshold {
+								log.Printf("threshold unreached, id=%d, from=%s, amount=%d, to=%s\n", requestId, from, amount, to)
+								continue
+							}
 							batch.addTask(depositTask{
 								txid:      tx.Hash,
 								requestId: requestId,
