@@ -8,13 +8,13 @@ using Neo.SmartContract.Framework.Attributes;
 using Neo.SmartContract.Framework.Native;
 using Neo.SmartContract.Framework.Services;
 
-namespace EvmLayerContract
+namespace ManageContract
 {
     [DisplayName("EvmLayerContract")]
     [ManifestExtra("Author", "NGD")]
     [ManifestExtra("Email", "developer@neo.ngd.org")]
     [ManifestExtra("Description", "This is a contract in Neo for evm layer")]
-    public class EvmLayerContract : SmartContract
+    public class ManageContract : SmartContract
     {
         private const byte depositedPrefix = 0x01;
         private static readonly byte[] OwnerKey = new byte[] { 0x02 };

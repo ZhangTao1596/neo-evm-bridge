@@ -1,4 +1,4 @@
-namespace EvmLayerContract
+namespace ManageContract
 {
     public static class Helper
     {

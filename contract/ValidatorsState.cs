@@ -2,7 +2,7 @@ using System;
 using Neo;
 using Neo.Cryptography.ECC;
 
-namespace EvmLayerContract
+namespace ManageContract
 {
     public class ValidatorsState
     {

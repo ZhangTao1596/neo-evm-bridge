@@ -2,7 +2,7 @@ using System;
 using System.Numerics;
 using Neo;
 
-namespace EvmLayerContract
+namespace ManageContract
 {
     public class DepositState
     {
