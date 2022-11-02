@@ -137,17 +137,9 @@ func (l *Relayer) Run() {
 		if err != nil {
 			panic(fmt.Errorf("can't sync block %d: %w", i, err))
 		}
-		err = l.saveHandled()
-		if err != nil {
-			panic(fmt.Errorf("can't save block %d: %w", i, err))
-		}
 		l.lastHeader = &block.RpcBlockHeader
 		i++
 	}
-}
-
-func (l *Relayer) saveHandled() error {
-	return nil
 }
 
 func (l *Relayer) isJointHeader(header *models.RpcBlockHeader) bool {
@@ -310,16 +302,16 @@ func (l *Relayer) sync(batch *taskBatch) error {
 	}
 	var stateroot *mpt.StateRoot
 	if len(batch.tasks) > 0 {
-		if l.lastStateRoot != nil && l.lastStateRoot.Index >= uint32(batch.block.Index) {
+		if l.lastStateRoot != nil && l.lastStateRoot.Index >= batch.Index() {
 			stateroot = l.lastStateRoot
 		} else {
-			for stateIndex := uint32(batch.block.Index); stateIndex < uint32(batch.block.Index)+MaxStateRootTryCount; {
+			for stateIndex := batch.Index(); stateIndex < batch.Index()+MaxStateRootTryCount; {
 				stateroot = l.client.GetStateRoot(stateIndex)
 				if stateroot == nil {
 					return errors.New("can't get state root")
 				}
 				if len(stateroot.Witnesses) == 0 {
-					log.Printf("unverified state root, index=%d", batch.block.Index)
+					log.Printf("unverified state root, index=%d", batch.Index())
 					continue
 				}
 				l.lastStateRoot = stateroot
@@ -374,7 +366,7 @@ func (l *Relayer) sync(batch *taskBatch) error {
 			return fmt.Errorf("can't build tx proof: %w", err)
 		}
 		stateproof := l.client.GetProof(stateroot.RootHash, l.cfg.ManageContract, crypto.Base64Encode(key))
-		tx, err := l.invokeStateSync(method, uint32(batch.block.Index), t.TxId(), txproof, stateroot.Index, stateproof)
+		tx, err := l.invokeStateSync(method, batch.Index(), t.TxId(), txproof, stateroot.Index, stateproof)
 		if err != nil {
 			if strings.Contains(err.Error(), "already synced") {
 				log.Printf("%s skip synced\n", method)
@@ -494,6 +486,10 @@ type taskBatch struct {
 	block   *models.RpcBlock
 	isJoint bool
 	tasks   []task
+}
+
+func (b taskBatch) Index() uint32 {
+	return uint32(b.block.Index)
 }
 
 func (b *taskBatch) addTask(t task) {
