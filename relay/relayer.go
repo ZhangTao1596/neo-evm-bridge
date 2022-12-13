@@ -287,7 +287,7 @@ func (l *Relayer) sync(batch *taskBatch) error {
 		if err != nil {
 			return fmt.Errorf("can't encode block header: %w", err)
 		}
-		tx, err := l.invokeSyncObject(ConnectorSyncHeader, b)
+		tx, err := l.invokeObjectSync(ConnectorSyncHeader, b)
 		if err != nil {
 			if strings.Contains(err.Error(), ConnectorAlreadySyncedError) {
 				log.Println("skip synced header")
@@ -319,7 +319,7 @@ func (l *Relayer) sync(batch *taskBatch) error {
 				if err != nil {
 					return fmt.Errorf("can't encode stateroot: %w", err)
 				}
-				tx, err := l.invokeSyncObject(ConnectorSyncStateRoot, b)
+				tx, err := l.invokeObjectSync(ConnectorSyncStateRoot, b)
 				if err != nil {
 					if strings.Contains(err.Error(), ConnectorAlreadySyncedError) {
 						log.Println("skip synced state root")
@@ -388,7 +388,7 @@ func (l *Relayer) sync(batch *taskBatch) error {
 	return l.commitTransactions(transactions)
 }
 
-func (l *Relayer) invokeSyncObject(method string, object []byte) (*types.Transaction, error) {
+func (l *Relayer) invokeObjectSync(method string, object []byte) (*types.Transaction, error) {
 	data, err := l.connector.Abi.Pack(method, object)
 	if err != nil {
 		return nil, fmt.Errorf("can't pack sync object, method=%s: %w", method, err)

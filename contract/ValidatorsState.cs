@@ -1,6 +1,7 @@
 using System;
 using Neo;
 using Neo.Cryptography.ECC;
+using Neo.SmartContract.Framework;
 
 namespace ManageContract
 {
@@ -12,11 +13,11 @@ namespace ManageContract
         public byte[] Serialize()
         {
             var data = (byte[])TxHash;
-            data = Helper.BytesAppend(data, (byte)Validators.Length);
+            data = Util.BytesAppend(data, (byte)Validators.Length);
             foreach (var p in Validators)
             {
-                data = Helper.BytesAppend(data, (byte)p.Length);
-                data = Helper.BytesConcat(data, (byte[])p);
+                data = Util.BytesAppend(data, (byte)p.Length);
+                data = Helper.Concat(data, (byte[])p);
             }
             return data;
         }
