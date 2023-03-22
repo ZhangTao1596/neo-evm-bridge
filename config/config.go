@@ -3,12 +3,10 @@ package config
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/joeqian10/neo3-gogogo/helper"
+	"github.com/nspcc-dev/neo-go/pkg/util"
 )
 
 type Config struct {
@@ -16,7 +14,7 @@ type Config struct {
 	SideSeeds      []string       `json:"sideSeeds"`
 	Start          uint32         `json:"start"`
 	End            uint32         `json:"end"`
-	ManageContract string         `json:"manageContract"`
+	BridgeContract util.Uint160   `json:"bridgeContract"`
 	Wallet         string         `json:"wallet"`
 	Relayer        common.Address `json:"relayer"`
 }
@@ -45,12 +43,8 @@ func (cfg *Config) check() error {
 	if len(cfg.SideSeeds) == 0 {
 		return errors.New("missing seeds")
 	}
-	if !strings.HasPrefix(cfg.ManageContract, "0x") {
+	if cfg.BridgeContract == (util.Uint160{}) {
 		return errors.New("invalid manage contract address")
-	}
-	_, err := helper.UInt160FromString(cfg.ManageContract)
-	if err != nil {
-		return fmt.Errorf("invalid manage contract address: %w", err)
 	}
 	return nil
 }

@@ -33,8 +33,3 @@ func TestHash160(t *testing.T) {
 	h1 := hash.Hash160(b)
 	fmt.Println(h1)
 }
-
-func TestVerifyProof(t *testing.T) {
-
-}
-

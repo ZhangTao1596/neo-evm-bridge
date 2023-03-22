@@ -2,39 +2,28 @@ package relay
 
 import (
 	"encoding/binary"
-	"fmt"
-	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/joeqian10/neo3-gogogo/crypto"
-	"github.com/joeqian10/neo3-gogogo/helper"
-	"github.com/joeqian10/neo3-gogogo/io"
-	"github.com/joeqian10/neo3-gogogo/mpt"
-	"github.com/joeqian10/neo3-gogogo/rpc/models"
-	"github.com/neo-ngd/neo-go/pkg/core/block"
+	sblock "github.com/neo-ngd/neo-go/pkg/core/block"
+	sstate "github.com/neo-ngd/neo-go/pkg/core/state"
 	"github.com/neo-ngd/neo-go/pkg/core/transaction"
 	"github.com/neo-ngd/neo-go/pkg/crypto/hash"
-	nio "github.com/neo-ngd/neo-go/pkg/io"
+	sio "github.com/neo-ngd/neo-go/pkg/io"
+	"github.com/nspcc-dev/neo-go/pkg/core/block"
+	"github.com/nspcc-dev/neo-go/pkg/core/state"
+	"github.com/nspcc-dev/neo-go/pkg/util"
 )
 
-func proveTx(block *models.RpcBlock, txid string) ([]byte, error) {
-	hashes := make([]common.Hash, len(block.Tx))
-	for i, tx := range block.Tx {
-		h, err := helper.UInt256FromString(tx.Hash)
-		if err != nil {
-			return nil, fmt.Errorf("can't parse tx hash in header: %w", err)
-		}
-		hashes[i] = common.BytesToHash(h.ToByteArray())
+func proveTx(block *block.Block, txid util.Uint256) ([]byte, error) {
+	hashes := make([]common.Hash, len(block.Transactions))
+	for i, tx := range block.Transactions {
+		hashes[i] = common.BytesToHash(tx.Hash().BytesBE())
 	}
 	tree, err := hash.NewMerkleTree(hashes)
 	if err != nil {
 		return nil, err
 	}
-	h, err := helper.UInt256FromString(txid)
-	if err != nil {
-		return nil, fmt.Errorf("can't parse tx hash in header: %w", err)
-	}
-	proofs, path, err := tree.Prove(common.BytesToHash(h.ToByteArray()))
+	proofs, path, err := tree.Prove(common.BytesToHash(txid.BytesBE()))
 	if err != nil {
 		return nil, err
 	}
@@ -46,62 +35,41 @@ func proveTx(block *models.RpcBlock, txid string) ([]byte, error) {
 	return proof, nil
 }
 
-func rpcHeaderToBlockHeader(h models.RpcBlockHeader) (*block.Header, error) {
-	nonce, err := strconv.ParseUint(h.Nonce, 16, 64)
-	if err != nil {
-		return nil, fmt.Errorf("can't parse nonce in header: %w", err)
-	}
-	consensus, err := crypto.AddressToScriptHash(h.NextConsensus, helper.DefaultAddressVersion)
-	if err != nil {
-		return nil, fmt.Errorf("can't parse next consensus in header: %w", err)
-	}
-	verification, err := crypto.Base64Decode(h.Witnesses[0].Verification)
-	if err != nil {
-		return nil, fmt.Errorf("can't parse verification in header: %w", err)
-	}
-	invocation, err := crypto.Base64Decode(h.Witnesses[0].Invocation)
-	if err != nil {
-		return nil, fmt.Errorf("can't parse invocation in header: %w", err)
-	}
-	preHash, err := helper.UInt256FromString(h.PreviousBlockHash)
-	if err != nil {
-		return nil, fmt.Errorf("can't parse prehash in header: %w", err)
-	}
-	merkleRoot, err := helper.UInt256FromString(h.MerkleRoot)
-	if err != nil {
-		return nil, fmt.Errorf("can't parse merkle root in header: %w", err)
-	}
-	header := block.Header{
-		Version:       uint32(h.Version),
-		PrevHash:      common.BytesToHash(preHash.ToByteArray()),
-		MerkleRoot:    common.BytesToHash(merkleRoot.ToByteArray()),
-		Timestamp:     uint64(h.Time),
-		Nonce:         nonce,
-		Index:         uint32(h.Index),
-		NextConsensus: common.BytesToAddress(consensus.ToByteArray()),
+func mainHeaderToSideHeader(h *block.Header) *sblock.Header {
+	header := sblock.Header{
+		Version:       h.Version,
+		PrevHash:      common.BytesToHash(h.PrevHash.BytesBE()),
+		MerkleRoot:    common.BytesToHash(h.MerkleRoot.BytesBE()),
+		Timestamp:     h.Timestamp,
+		Nonce:         h.Nonce,
+		Index:         h.Index,
+		NextConsensus: common.BytesToAddress(h.NextConsensus.BytesBE()),
 		PrimaryIndex:  h.PrimaryIndex,
 		Witness: transaction.Witness{
-			VerificationScript: verification,
-			InvocationScript:   invocation,
+			VerificationScript: h.Script.VerificationScript,
+			InvocationScript:   h.Script.InvocationScript,
 		},
 	}
-	return &header, nil
+	return &header
 }
 
-func blockHeaderToBytes(header *block.Header) ([]byte, error) {
-	writer := nio.NewBufBinWriter()
-	header.EncodeBinary(writer.BinWriter)
-	if writer.Err != nil {
-		return nil, writer.Err
-	}
-	return writer.Bytes(), nil
+func blockHeaderToBytes(header *sblock.Header) ([]byte, error) {
+	return sio.ToByteArray(header)
 }
 
-func staterootToBytes(stateroot *mpt.StateRoot) ([]byte, error) {
-	writer := io.NewBufBinaryWriter()
-	stateroot.Serialize(writer.BinaryWriter)
-	if writer.Err != nil {
-		return nil, writer.Err
+func mainStateRootToSideStateRoot(s *state.MPTRoot) *sstate.MPTRoot {
+	stateroot := &sstate.MPTRoot{
+		Version: s.Version,
+		Index:   s.Index,
+		Root:    common.BytesToHash(s.Root.BytesBE()),
+		Witness: transaction.Witness{
+			VerificationScript: s.Witness[0].VerificationScript,
+			InvocationScript:   s.Witness[0].InvocationScript,
+		},
 	}
-	return writer.Bytes(), nil
+	return stateroot
+}
+
+func staterootToBytes(stateroot *sstate.MPTRoot) ([]byte, error) {
+	return sio.ToByteArray(stateroot)
 }

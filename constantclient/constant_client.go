@@ -4,17 +4,19 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/joeqian10/neo3-gogogo/crypto"
-	"github.com/joeqian10/neo3-gogogo/mpt"
-	"github.com/joeqian10/neo3-gogogo/rpc"
-	"github.com/joeqian10/neo3-gogogo/rpc/models"
 	"github.com/neo-ngd/neo-go/pkg/core/state"
 	"github.com/neo-ngd/neo-go/pkg/rpc/client"
 	"github.com/neo-ngd/neo-go/pkg/rpc/response"
 	"github.com/neo-ngd/neo-go/pkg/rpc/response/result"
+	"github.com/nspcc-dev/neo-go/pkg/core/block"
+	mstate "github.com/nspcc-dev/neo-go/pkg/core/state"
+	mio "github.com/nspcc-dev/neo-go/pkg/io"
+	"github.com/nspcc-dev/neo-go/pkg/neorpc"
+	mresult "github.com/nspcc-dev/neo-go/pkg/neorpc/result"
+	"github.com/nspcc-dev/neo-go/pkg/rpcclient"
+	"github.com/nspcc-dev/neo-go/pkg/util"
 )
 
 type ConstantClient struct {
@@ -22,7 +24,7 @@ type ConstantClient struct {
 	sideSeeds []string
 	mIndex    int
 	sIndex    int
-	mClient   *rpc.RpcClient
+	mClient   *rpcclient.Client
 	sClient   *client.Client
 }
 
@@ -35,114 +37,126 @@ func New(mseeds, sseeds []string) *ConstantClient {
 		mClient:   nil,
 		sClient:   nil,
 	}
-	c.newClient(true)
-	c.newClient(false)
+	c.ensureNewClient(true)
+	c.ensureNewClient(false)
 	return c
 }
 
-func (c *ConstantClient) newClient(m bool) {
-	if m {
-		c.mClient = rpc.NewClient(c.mainSeeds[c.mIndex])
-		c.mIndex = (c.mIndex + 1) % len(c.mainSeeds)
+func newClient(index *int, count int, newClient func(index int) (interface{}, error)) interface{} {
+	i := *index
+	cli, err := newClient(*index)
+	for err != nil {
+		*index = (*index + 1) % count
+		if *index == i {
+			panic(fmt.Errorf("can't initialize client"))
+		}
+		cli, err = newClient(*index)
+	}
+	return cli
+}
+
+func (c *ConstantClient) ensureNewClient(isMain bool) {
+	if isMain {
+		c.mClient = newClient(&c.mIndex, len(c.mainSeeds), func(index int) (interface{}, error) {
+			cli, err := rpcclient.New(context.Background(), c.mainSeeds[index], rpcclient.Options{})
+			if err != nil {
+				return nil, err
+			}
+			err = cli.Init()
+			return cli, err
+		}).(*rpcclient.Client)
 	} else {
-		sIndex := c.sIndex
-		sclient, err := client.New(context.Background(), c.sideSeeds[sIndex], client.Options{})
-		c.sIndex = (c.sIndex + 1) % len(c.sideSeeds)
-		for err != nil {
-			sclient, err = client.New(context.Background(), c.sideSeeds[c.sIndex], client.Options{})
-			c.sIndex = (c.sIndex + 1) % len(c.sideSeeds)
-			if c.sIndex == sIndex {
-				panic(fmt.Errorf("can't initialize side client"))
+		c.sClient = newClient(&c.sIndex, len(c.sideSeeds), func(index int) (interface{}, error) {
+			cli, err := client.New(context.Background(), c.sideSeeds[index], client.Options{})
+			if err != nil {
+				return nil, err
 			}
-		}
-		c.sClient = sclient
+			err = cli.Init()
+			return cli, err
+		}).(*client.Client)
 	}
 }
 
-func (c *ConstantClient) ensureRequestMain(doRequest func(*rpc.RpcClient) (*rpc.ErrorResponse, interface{})) interface{} {
-	eresp, r := doRequest(c.mClient)
-	for eresp.NetError != nil {
-		c.newClient(true)
-		eresp, r = doRequest(c.mClient)
-	}
-	if len(eresp.Error.Message) > 0 && eresp.Error.Code != 0 {
-		return nil
-	}
-	return r
+func isSideNetworkError(err error) bool {
+	_, ok := err.(*neorpc.Error)
+	return !ok
 }
 
-func (c *ConstantClient) ensureRequestSide(doRequest func(*client.Client) (interface{}, error), resultExpected bool) (interface{}, error) {
+func isMainNetworkError(err error) bool {
+	_, ok := err.(*response.Error)
+	return !ok
+}
+
+func isNetworkError(err error, isMain bool) bool {
+	if isMain {
+		return isMainNetworkError(err)
+	}
+	return isSideNetworkError(err)
+}
+
+func (c *ConstantClient) ensureRequest(isMain bool, doRequest func() (interface{}, error), resultExpected bool) (interface{}, error) {
 	for {
-		r, err := doRequest(c.sClient)
+		r, err := doRequest()
 		if err != nil {
-			respe, ok := err.(*response.Error)
-			if resultExpected || !ok {
-				c.newClient(false)
+			if resultExpected || !isNetworkError(err, isMain) {
+				c.ensureNewClient(false)
 				continue
-			} else {
-				return nil, respe
 			}
 		}
-		return r, nil
+		return r, err
 	}
 }
 
-func (c *ConstantClient) GetApplicationLog(txid string) *models.RpcApplicationLog {
-	r := c.ensureRequestMain(func(client *rpc.RpcClient) (*rpc.ErrorResponse, interface{}) {
-		resp := client.GetApplicationLog(txid)
-		return &resp.ErrorResponse, &resp.Result
-	})
-	if r == nil {
+func (c *ConstantClient) GetApplicationLog(txid util.Uint256) *mresult.ApplicationLog {
+	r, err := c.ensureRequest(true, func() (interface{}, error) {
+		return c.mClient.GetApplicationLog(txid, nil)
+	}, true)
+	if r == nil || err != nil {
 		return nil
 	}
-	return r.(*models.RpcApplicationLog)
+	return r.(*mresult.ApplicationLog)
 }
 
-func isBlockUnreached(resp rpc.GetBlockResponse) bool {
-	return resp.Error.Code == -100 && resp.Error.Message == "Unknown block"
-}
-
-func (c *ConstantClient) GetBlock(index uint32) *models.RpcBlock {
-	sidx := strconv.FormatUint(uint64(index), 10)
-	r := c.ensureRequestMain(func(client *rpc.RpcClient) (*rpc.ErrorResponse, interface{}) {
-		resp := client.GetBlock(sidx)
-		return &resp.ErrorResponse, &resp.Result
-	})
-	if r == nil {
+func (c *ConstantClient) GetBlock(index uint32) *block.Block {
+	r, err := c.ensureRequest(true, func() (interface{}, error) {
+		return c.mClient.GetBlockByIndex(index)
+	}, false)
+	if r == nil || err != nil {
 		return nil
 	}
-	return r.(*models.RpcBlock)
+	return r.(*block.Block)
 }
 
-func (c *ConstantClient) GetStateRoot(index uint32) *mpt.StateRoot {
-	r := c.ensureRequestMain(func(client *rpc.RpcClient) (*rpc.ErrorResponse, interface{}) {
-		resp := client.GetStateRoot(index)
-		return &resp.ErrorResponse, &resp.Result
-	})
-	if r == nil {
+func (c *ConstantClient) GetStateRoot(index uint32) *mstate.MPTRoot {
+	r, err := c.ensureRequest(true, func() (interface{}, error) {
+		return c.mClient.GetStateRootByHeight(index)
+	}, false)
+	if r == nil || err != nil {
 		return nil
 	}
-	return r.(*mpt.StateRoot)
+	return r.(*mstate.MPTRoot)
 }
 
-func (c *ConstantClient) GetProof(rootHash, contractHash, key string) []byte {
-	r := c.ensureRequestMain(func(client *rpc.RpcClient) (*rpc.ErrorResponse, interface{}) {
-		resp := client.GetProof(rootHash, contractHash, key)
-		return &resp.ErrorResponse, &resp.Result
-	})
-	if r == nil {
+func proofToBytes(proof *mresult.ProofWithKey) []byte {
+	w := mio.NewBufBinWriter()
+	proof.EncodeBinary(w.BinWriter)
+	return w.Bytes()
+}
+
+func (c *ConstantClient) GetProof(rootHash util.Uint256, contractHash util.Uint160, key []byte) []byte {
+	r, err := c.ensureRequest(true, func() (interface{}, error) {
+		return c.mClient.FindStates(rootHash, contractHash, key, nil, nil)
+	}, false)
+	if r == nil || err != nil {
 		return nil
 	}
-	s, err := crypto.Base64Decode(*(r.(*string)))
-	if err != nil {
-		panic(fmt.Errorf("can't base64 decode proof: %w", err))
-	}
-	return s
+	res := r.(mresult.FindStates)
+	return proofToBytes(res.FirstProof)
 }
 
-func (c *ConstantClient) GetNativeContract(name string) *state.NativeContract {
-	r, _ := c.ensureRequestSide(func(client *client.Client) (interface{}, error) {
-		return client.GetNativeContracts()
+func (c *ConstantClient) Eth_NativeContract(name string) *state.NativeContract {
+	r, _ := c.ensureRequest(false, func() (interface{}, error) {
+		return c.sClient.GetNativeContracts()
 	}, true)
 	cs := r.([]state.NativeContract)
 	for _, contract := range cs {
@@ -154,29 +168,29 @@ func (c *ConstantClient) GetNativeContract(name string) *state.NativeContract {
 }
 
 func (c *ConstantClient) Eth_ChainId() uint64 {
-	r, _ := c.ensureRequestSide(func(client *client.Client) (interface{}, error) {
-		return client.Eth_ChainId()
+	r, _ := c.ensureRequest(false, func() (interface{}, error) {
+		return c.sClient.Eth_ChainId()
 	}, true)
 	return r.(uint64)
 }
 
 func (c *ConstantClient) Eth_GasPrice() *big.Int {
-	r, _ := c.ensureRequestSide(func(client *client.Client) (interface{}, error) {
-		return client.Eth_GasPrice()
+	r, _ := c.ensureRequest(false, func() (interface{}, error) {
+		return c.sClient.Eth_GasPrice()
 	}, true)
 	return r.(*big.Int)
 }
 
 func (c *ConstantClient) Eth_GetTransactionCount(address common.Address) uint64 {
-	r, _ := c.ensureRequestSide(func(client *client.Client) (interface{}, error) {
-		return client.Eth_GetTransactionCount(address)
+	r, _ := c.ensureRequest(false, func() (interface{}, error) {
+		return c.sClient.Eth_GetTransactionCount(address)
 	}, true)
 	return r.(uint64)
 }
 
 func (c *ConstantClient) Eth_EstimateGas(tx *result.TransactionObject) (uint64, error) {
-	r, err := c.ensureRequestSide(func(client *client.Client) (interface{}, error) {
-		return client.Eth_EstimateGas(tx)
+	r, err := c.ensureRequest(false, func() (interface{}, error) {
+		return c.sClient.Eth_EstimateGas(tx)
 	}, false)
 	if err != nil {
 		return 0, err
@@ -185,8 +199,8 @@ func (c *ConstantClient) Eth_EstimateGas(tx *result.TransactionObject) (uint64, 
 }
 
 func (c *ConstantClient) Eth_SendRawTransaction(rawTx []byte) (common.Hash, error) {
-	r, err := c.ensureRequestSide(func(client *client.Client) (interface{}, error) {
-		return client.Eth_SendRawTransaction(rawTx)
+	r, err := c.ensureRequest(false, func() (interface{}, error) {
+		return c.sClient.Eth_SendRawTransaction(rawTx)
 	}, false)
 	if err != nil {
 		return common.Hash{}, err
@@ -195,8 +209,8 @@ func (c *ConstantClient) Eth_SendRawTransaction(rawTx []byte) (common.Hash, erro
 }
 
 func (c *ConstantClient) Eth_GetTransactionByHash(hash common.Hash) *result.TransactionOutputRaw {
-	r, _ := c.ensureRequestSide(func(client *client.Client) (interface{}, error) {
-		return client.Eth_GetTransactionByHash(hash)
+	r, _ := c.ensureRequest(false, func() (interface{}, error) {
+		return c.sClient.Eth_GetTransactionByHash(hash)
 	}, true)
 	return r.(*result.TransactionOutputRaw)
 }

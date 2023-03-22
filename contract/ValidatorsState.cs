@@ -3,7 +3,7 @@ using Neo;
 using Neo.Cryptography.ECC;
 using Neo.SmartContract.Framework;
 
-namespace ManageContract
+namespace Bridge
 {
     public class ValidatorsState
     {

@@ -1,4 +1,4 @@
-﻿using ManageContract;
+﻿using Bridge;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace ContractTest
@@ -6,6 +6,28 @@ namespace ContractTest
     [TestClass]
     public class TestUtil
     {
+        [TestMethod]
+        public void TestArrayCopy()
+        {
+            var a = new byte[] { 1, 2, 3 };
+            var b = new byte[4];
+            Util.ArrayCopy(b, 1, a, 0, a.Length);
+            Assert.AreEqual(1, b[1]);
+            Assert.AreEqual(3, b[3]);
+            Util.ArrayCopy(b, 1, a, 1, 2);
+            Assert.AreEqual(2, b[1]);
+            Assert.AreEqual(3, b[2]);
+        }
+
+        [TestMethod]
+        public void BytesAppend()
+        {
+            var a = new byte[] { 1, 2 };
+            a = Util.BytesAppend(a, 3);
+            Assert.AreEqual(3, a.Length);
+            Assert.AreEqual(3, a[2]);
+        }
+
         [TestMethod]
         public void TestUint16()
         {

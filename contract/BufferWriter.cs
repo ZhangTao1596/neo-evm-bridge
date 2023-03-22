@@ -1,17 +1,17 @@
 using System;
 using Neo;
 
-namespace ManageContract
+namespace Bridge
 {
     public class BufferWriter
     {
-        private byte[] buffer = new byte[1024];
+        private byte[] buffer = new byte[256];
         private int offset = 0;
 
         private void ResizeBuffer()
         {
             var newBuffer = new byte[buffer.Length * 2];
-            Util.ArrayCopy(buffer, 0, newBuffer, 0, buffer.Length);
+            Util.ArrayCopy(newBuffer, 0, buffer, 0, offset);
             buffer = newBuffer;
         }
 
@@ -24,7 +24,7 @@ namespace ManageContract
         {
             while (offset + b.Length > buffer.Length)
                 ResizeBuffer();
-            Util.ArrayCopy(b, 0, buffer, offset, b.Length);
+            Util.ArrayCopy(buffer, offset, b, 0, b.Length);
             offset += b.Length;
         }
 
@@ -35,13 +35,13 @@ namespace ManageContract
                 WriteByte((byte)value);
                 return;
             }
-            if (value < 0xffff)
+            if (value <= 0xffff)
             {
                 WriteByte(0xfd);
                 WriteBytes(Util.UInt16ToLittleEndian((UInt16)value));
                 return;
             }
-            if (value < 0xffffffff)
+            if (value <= 0xffffffff)
             {
                 WriteByte(0xfe);
                 WriteBytes(Util.UInt32ToLittleEndian((UInt32)value));
@@ -55,6 +55,11 @@ namespace ManageContract
         {
             WriteVarUint((UInt64)b.Length);
             WriteBytes(b);
+        }
+
+        public void WriteUInt64(UInt64 num)
+        {
+            WriteBytes(Util.UInt64ToLittleEndian(num));
         }
 
         public void WriteUint256(UInt256 hash)

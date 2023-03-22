@@ -3,15 +3,15 @@ using Neo.Cryptography.ECC;
 using Neo.SmartContract.Framework;
 using Neo.SmartContract.Framework.Native;
 
-namespace ManageContract
+namespace Bridge
 {
     public static class Util
     {
-        public static void ArrayCopy(byte[] source, int srcIndex, byte[] dest, int destIndex, int length)
+        public static void ArrayCopy(byte[] dest, int destIndex, byte[] source, int srcIndex, int length)
         {
-            if (srcIndex >= source.Length || srcIndex + length >= source.Length || srcIndex < 0 || length < 0 ||
-            destIndex >= dest.Length || destIndex + length >= dest.Length || destIndex < 0)
-                throw new Exception("invalid range");
+            if (srcIndex >= source.Length || srcIndex + length > source.Length || srcIndex < 0 || length < 0 ||
+            destIndex >= dest.Length || destIndex + length > dest.Length || destIndex < 0)
+                throw new Exception("[Util] invalid range");
             for (int i = 0; i < length; i++)
                 dest[destIndex + i] = source[srcIndex + i];
         }
@@ -29,7 +29,7 @@ namespace ManageContract
         public static UInt16 UInt16FromLittleEndian(byte[] b)
         {
             if (b.Length < 2)
-                throw new Exception("wrong uint16 length");
+                throw new Exception("[Util] wrong uint16 length");
             return (UInt16)((UInt16)b[0] | (UInt16)b[1] << 8);
         }
 
@@ -55,14 +55,14 @@ namespace ManageContract
         public static UInt32 UInt32FromLittleEndian(byte[] b)
         {
             if (b.Length < 4)
-                throw new Exception("wrong uint32 length");
+                throw new Exception("[Util] wrong uint32 length");
             return (UInt32)((UInt32)b[0] | (UInt32)b[1] << 8 | (UInt32)b[2] << 16 | (UInt32)b[3] << 24);
         }
 
         public static UInt64 UInt64FromLittleEndian(byte[] b)
         {
             if (b.Length < 8)
-                throw new Exception("wrong uint64 length");
+                throw new Exception("[Util] wrong uint64 length");
             return (UInt64)((UInt64)b[0] | (UInt64)b[1] << 8 | (UInt64)b[2] << 16 | (UInt64)b[3] << 24
             | (UInt64)b[4] << 32 | (UInt64)b[5] << 40 | (UInt64)b[6] << 48 | (UInt64)b[7] << 56);
         }
@@ -86,7 +86,7 @@ namespace ManageContract
         public static bool StartWith(byte[] s, byte[] prefix)
         {
             if (prefix.Length == 0)
-                throw new Exception("empty prefix");
+                throw new Exception("[Util] empty prefix");
             if (s.Length < prefix.Length)
                 return false;
             for (int i = 0; i < prefix.Length; i++)

@@ -2,7 +2,7 @@ using System;
 using Neo;
 using Neo.SmartContract.Framework;
 
-namespace ManageContract
+namespace Bridge
 {
     public class MerkleTree
     {

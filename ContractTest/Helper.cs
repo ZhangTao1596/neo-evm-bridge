@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 
 namespace ContractTest
 {
@@ -14,6 +15,14 @@ namespace ContractTest
             for (int i = 0; i < result.Length; i++)
                 result[i] = byte.Parse(value.Substring(i * 2, 2), NumberStyles.AllowHexSpecifier);
             return result;
+        }
+
+        public static string ToHexString(this byte[] value)
+        {
+            StringBuilder sb = new();
+            foreach (byte b in value)
+                sb.AppendFormat("{0:x2}", b);
+            return sb.ToString();
         }
     }
 }

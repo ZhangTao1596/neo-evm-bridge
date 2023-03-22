@@ -9,13 +9,13 @@ using Neo.SmartContract.Framework.Attributes;
 using Neo.SmartContract.Framework.Native;
 using Neo.SmartContract.Framework.Services;
 
-namespace ManageContract
+namespace Bridge
 {
-    [DisplayName("EvmLayerManageContract")]
+    [DisplayName("BridgeContract")]
     [ManifestExtra("Author", "NGD")]
     [ManifestExtra("Email", "developer@neo.ngd.org")]
     [ManifestExtra("Description", "This is a contract in Neo for evm layer")]
-    public class EvmLayerManageContract : SmartContract
+    public class BridgeContract : SmartContract
     {
         private const ulong DepositThreshold = 100000000; //1GAS
         private const ulong BaseBonus = 3000000; //0.03GAS
@@ -42,7 +42,7 @@ namespace ManageContract
 
         public static string Name()
         {
-            return "EvmLayerManageContract";
+            return "ManageContract";
         }
 
         public static void _deploy(object _, bool isUpdate)
@@ -53,6 +53,7 @@ namespace ManageContract
             {
                 var owner = ((Transaction)Runtime.ScriptContainer).Sender;
                 Storage.Put(Storage.CurrentContext, OwnerKey, owner);
+                Storage.Put(Storage.CurrentContext, DepositIdKey, 1);
                 OnDeployed(owner);
             }
         }
@@ -65,14 +66,14 @@ namespace ManageContract
             return id;
         }
 
-        public static void OnNEP17Payment(UInt160 from, BigInteger amount, object data)
+        public static void OnNEP17Payment(UInt160 from, UInt64 amount, object data)
         {
             if (Runtime.CallingScriptHash != GAS.Hash || from == null)
                 throw new Exception("only receive gas");
             Deposit(from, amount, data);
         }
 
-        private static void Deposit(UInt160 from, BigInteger amount, object data)
+        private static void Deposit(UInt160 from, UInt64 amount, object data)
         {
             var to = (UInt160)data;
             if (!to.IsValid || to.IsZero)
@@ -93,7 +94,7 @@ namespace ManageContract
             OnDeposited(id, from, amount, to);
         }
 
-        public static bool Verify()
+        public static bool OwnerCheck()
         {
             var owner = (UInt160)Storage.Get(Storage.CurrentContext, OwnerKey);
             return Runtime.CheckWitness(owner);
@@ -101,7 +102,7 @@ namespace ManageContract
 
         public static void DesignateValidators(ECPoint[] pks)
         {
-            if (!Verify())
+            if (!OwnerCheck())
                 throw new Exception("permission denied");
             if (!Util.ECPointsCheck(pks))
                 throw new Exception("invalid public key");
@@ -138,12 +139,6 @@ namespace ManageContract
                 return state.Validators;
             }
             return new ECPoint[0];
-        }
-
-        public static BigInteger Deposited(UInt160 address)
-        {
-            var depositedMap = new StorageMap(depositedPrefix);
-            return (BigInteger)depositedMap.Get(address);
         }
 
         private static byte[] CreateHeaderKey(UInt32 index)

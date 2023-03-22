@@ -3,7 +3,7 @@ using Neo;
 using Neo.SmartContract.Framework;
 using Neo.SmartContract.Framework.Native;
 
-namespace ManageContract
+namespace Bridge
 {
     public class Header
     {

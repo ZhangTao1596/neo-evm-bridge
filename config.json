@@ -1,13 +1,13 @@
 {
     "mainSeeds": [
-        "http://localhost:11332"
+        "http://localhost:10452"
     ],
     "sideSeeds": [
-        "http://localhost:20302"
+        "http://localhost:20452"
     ],
-    "manageContract": "0x1929b47bdf93ab3350c8cb01614359623ce196d6",
-    "start": 98,
-    "end": 1000,
-    "wallet": "w.json",
-    "relayer": "0x889bc4986d3aa69500525dc9ca4373615389c9a1"
+    "bridgeContract": "0xbbdf1596062cccdeccb7bc8a867a0b9820ca05ed",
+    "start": 2176,
+    "end": 2178,
+    "wallet": "relayer.json",
+    "relayer": "0x6039c5cb351ab43838d5325ab447faae96b39f2c"
 }

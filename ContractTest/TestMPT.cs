@@ -1,4 +1,4 @@
-using ManageContract;
+using Bridge;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Neo;
 
