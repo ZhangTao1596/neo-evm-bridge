@@ -94,47 +94,67 @@ func isNetworkError(err error, isMain bool) bool {
 	return isSideNetworkError(err)
 }
 
-func (c *ConstantClient) ensureRequest(isMain bool, doRequest func() (interface{}, error), resultExpected bool) (interface{}, error) {
-	for {
+func (c *ConstantClient) ensureRequest(isMain bool, doRequest func() (interface{}, error)) (interface{}, error) {
+	retry := 5
+	var lasterr error
+	if isMain {
+		retry = len(c.mainSeeds)
+	} else {
+		retry = len(c.sideSeeds)
+	}
+	for retry > 0 {
 		r, err := doRequest()
 		if err != nil {
-			if resultExpected || !isNetworkError(err, isMain) {
+			retry--
+			lasterr = err
+			if isNetworkError(err, isMain) {
 				c.ensureNewClient(false)
 				continue
 			}
 		}
 		return r, err
 	}
+	return nil, lasterr
 }
 
-func (c *ConstantClient) GetApplicationLog(txid util.Uint256) *mresult.ApplicationLog {
+func (c *ConstantClient) GetApplicationLog(txid util.Uint256) (*mresult.ApplicationLog, error) {
 	r, err := c.ensureRequest(true, func() (interface{}, error) {
 		return c.mClient.GetApplicationLog(txid, nil)
-	}, true)
-	if r == nil || err != nil {
-		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return r.(*mresult.ApplicationLog)
+	return r.(*mresult.ApplicationLog), nil
 }
 
-func (c *ConstantClient) GetBlock(index uint32) *block.Block {
+func (c *ConstantClient) GetBlock(index uint32) (*block.Block, error) {
 	r, err := c.ensureRequest(true, func() (interface{}, error) {
 		return c.mClient.GetBlockByIndex(index)
-	}, false)
-	if r == nil || err != nil {
-		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return r.(*block.Block)
+	return r.(*block.Block), nil
 }
 
-func (c *ConstantClient) GetStateRoot(index uint32) *mstate.MPTRoot {
+func (c *ConstantClient) GetBlockCount() (uint32, error) {
+	r, err := c.ensureRequest(true, func() (interface{}, error) {
+		return c.mClient.GetBlockCount()
+	})
+	if err != nil {
+		return 0, err
+	}
+	return r.(uint32), nil
+}
+
+func (c *ConstantClient) GetStateRoot(index uint32) (*mstate.MPTRoot, error) {
 	r, err := c.ensureRequest(true, func() (interface{}, error) {
 		return c.mClient.GetStateRootByHeight(index)
-	}, false)
-	if r == nil || err != nil {
-		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return r.(*mstate.MPTRoot)
+	return r.(*mstate.MPTRoot), nil
 }
 
 func proofToBytes(proof *mresult.ProofWithKey) []byte {
@@ -143,55 +163,58 @@ func proofToBytes(proof *mresult.ProofWithKey) []byte {
 	return w.Bytes()
 }
 
-func (c *ConstantClient) GetProof(rootHash util.Uint256, contractHash util.Uint160, key []byte) []byte {
+func (c *ConstantClient) GetProof(rootHash util.Uint256, contractHash util.Uint160, key []byte) ([]byte, error) {
 	r, err := c.ensureRequest(true, func() (interface{}, error) {
-		return c.mClient.FindStates(rootHash, contractHash, key, nil, nil)
-	}, false)
-	if r == nil || err != nil {
-		return nil
+		return c.mClient.GetProof(rootHash, contractHash, key)
+	})
+	if err != nil {
+		return nil, err
 	}
-	res := r.(mresult.FindStates)
-	return proofToBytes(res.FirstProof)
+	res := r.(*mresult.ProofWithKey)
+	return proofToBytes(res), nil
 }
 
-func (c *ConstantClient) Eth_NativeContract(name string) *state.NativeContract {
-	r, _ := c.ensureRequest(false, func() (interface{}, error) {
+func (c *ConstantClient) Eth_NativeContract(name string) (*state.NativeContract, error) {
+	r, err := c.ensureRequest(false, func() (interface{}, error) {
 		return c.sClient.GetNativeContracts()
-	}, true)
+	})
+	if err != nil {
+		return nil, err
+	}
 	cs := r.([]state.NativeContract)
 	for _, contract := range cs {
 		if contract.Name == name {
-			return &contract
+			return &contract, nil
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 func (c *ConstantClient) Eth_ChainId() uint64 {
 	r, _ := c.ensureRequest(false, func() (interface{}, error) {
 		return c.sClient.Eth_ChainId()
-	}, true)
+	})
 	return r.(uint64)
 }
 
 func (c *ConstantClient) Eth_GasPrice() *big.Int {
 	r, _ := c.ensureRequest(false, func() (interface{}, error) {
 		return c.sClient.Eth_GasPrice()
-	}, true)
+	})
 	return r.(*big.Int)
 }
 
 func (c *ConstantClient) Eth_GetTransactionCount(address common.Address) uint64 {
 	r, _ := c.ensureRequest(false, func() (interface{}, error) {
 		return c.sClient.Eth_GetTransactionCount(address)
-	}, true)
+	})
 	return r.(uint64)
 }
 
 func (c *ConstantClient) Eth_EstimateGas(tx *result.TransactionObject) (uint64, error) {
 	r, err := c.ensureRequest(false, func() (interface{}, error) {
 		return c.sClient.Eth_EstimateGas(tx)
-	}, false)
+	})
 	if err != nil {
 		return 0, err
 	}
@@ -201,7 +224,7 @@ func (c *ConstantClient) Eth_EstimateGas(tx *result.TransactionObject) (uint64, 
 func (c *ConstantClient) Eth_SendRawTransaction(rawTx []byte) (common.Hash, error) {
 	r, err := c.ensureRequest(false, func() (interface{}, error) {
 		return c.sClient.Eth_SendRawTransaction(rawTx)
-	}, false)
+	})
 	if err != nil {
 		return common.Hash{}, err
 	}
@@ -211,6 +234,6 @@ func (c *ConstantClient) Eth_SendRawTransaction(rawTx []byte) (common.Hash, erro
 func (c *ConstantClient) Eth_GetTransactionByHash(hash common.Hash) *result.TransactionOutputRaw {
 	r, _ := c.ensureRequest(false, func() (interface{}, error) {
 		return c.sClient.Eth_GetTransactionByHash(hash)
-	}, true)
+	})
 	return r.(*result.TransactionOutputRaw)
 }

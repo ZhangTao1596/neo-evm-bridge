@@ -54,3 +54,5 @@ require (
 replace github.com/ZhangTao1596/neo-evm-bridge => /Users/zhangtao/workspace/github.com/ZhangTao1596/neo-evm-bridge
 
 replace github.com/neo-ngd/neo-go => /Users/zhangtao/workspace/github.com/neo-ngd/neo-go
+
+replace github.com/nspcc-dev/neo-go => /Users/zhangtao/workspace/github.com/ZhangTao1596/neo-go

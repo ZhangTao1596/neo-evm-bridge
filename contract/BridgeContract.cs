@@ -42,7 +42,7 @@ namespace Bridge
 
         public static string Name()
         {
-            return "ManageContract";
+            return "BridgeContract";
         }
 
         public static void _deploy(object _, bool isUpdate)
@@ -69,7 +69,7 @@ namespace Bridge
         public static void OnNEP17Payment(UInt160 from, UInt64 amount, object data)
         {
             if (Runtime.CallingScriptHash != GAS.Hash || from == null)
-                throw new Exception("only receive gas");
+                throw new Exception("only accept gas");
             Deposit(from, amount, data);
         }
 

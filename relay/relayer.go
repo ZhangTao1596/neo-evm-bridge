@@ -33,7 +33,7 @@ const (
 	ValidatorsKey                     = 0x03
 	StateValidatorRole                = 4
 	BlockTimeSeconds                  = 15
-	MaxStateRootTryCount              = 1000
+	MaxStateRootGetRange              = 57600
 	MintThreshold                     = 100000000
 	RoleManagementContract            = "49cf4e5378ffcd4dec034fd98a174c5491e395e2"
 	BridgeContractName                = "Bridge"
@@ -56,6 +56,7 @@ type Relayer struct {
 	client                        *constantclient.ConstantClient
 	bridge                        *sstate.NativeContract
 	account                       *wallet.Account
+	best                          bool
 }
 
 func NewRelayer(cfg *config.Config, acc *wallet.Account) (*Relayer, error) {
@@ -64,9 +65,9 @@ func NewRelayer(cfg *config.Config, acc *wallet.Account) (*Relayer, error) {
 		return nil, err
 	}
 	client := constantclient.New(cfg.MainSeeds, cfg.SideSeeds)
-	bridge := client.Eth_NativeContract(BridgeContractName)
-	if bridge == nil {
-		return nil, errors.New("can't get bridge contract")
+	bridge, err := client.Eth_NativeContract(BridgeContractName)
+	if err != nil {
+		return nil, fmt.Errorf("can't get bridge contract %w", err)
 	}
 	return &Relayer{
 		cfg:                           cfg,
@@ -74,15 +75,27 @@ func NewRelayer(cfg *config.Config, acc *wallet.Account) (*Relayer, error) {
 		client:                        client,
 		bridge:                        bridge,
 		account:                       acc,
+		best:                          false,
 	}, nil
 }
 
 func (l *Relayer) Run() {
-	for i := l.cfg.Start; i < l.cfg.End; {
-		log.Printf("syncing block, index=%d", i)
-		block := l.client.GetBlock(i)
-		if block == nil {
+	for i := l.cfg.Start; l.cfg.End == 0 || i < l.cfg.End; {
+		if l.best {
 			time.Sleep(15 * time.Second)
+		}
+		log.Printf("syncing block, index=%d", i)
+		block, _ := l.client.GetBlock(i)
+		if block == nil {
+			if !l.best {
+				h, err := l.client.GetBlockCount()
+				if err != nil {
+					panic(err)
+				}
+				if i >= h {
+					l.best = true
+				}
+			}
 			continue
 		}
 		batch := new(taskBatch)
@@ -90,12 +103,15 @@ func (l *Relayer) Run() {
 		batch.isJoint = l.isJointHeader(&block.Header)
 		for _, tx := range block.Transactions {
 			log.Printf("syncing tx, hash=%s\n", tx.Hash())
-			applicationlog := l.client.GetApplicationLog(tx.Hash())
+			applicationlog, err := l.client.GetApplicationLog(tx.Hash())
+			if applicationlog == nil {
+				panic(fmt.Errorf("can't get application log, err: %w", err))
+			}
 			for _, execution := range applicationlog.Executions {
 				if execution.Trigger == trigger.Application && execution.VMState == vmstate.Halt {
 					for _, nevent := range execution.Events {
 						event := &nevent
-						if l.isManageContract(event) {
+						if l.isBridgeContract(event) {
 							if isDepositEvent(event) {
 								requestId, from, amount, to, err := l.parseDepositEvent(event)
 								if err != nil {
@@ -148,7 +164,7 @@ func (l *Relayer) Run() {
 
 func (l *Relayer) isJointHeader(header *block.Header) bool {
 	if l.lastHeader == nil && header.Index > 0 {
-		block := l.client.GetBlock(uint32(header.Index) - 1)
+		block, _ := l.client.GetBlock(uint32(header.Index) - 1)
 		l.lastHeader = &block.Header
 	}
 	return header.Index == 0 || l.lastHeader.NextConsensus != header.NextConsensus
@@ -271,7 +287,7 @@ func (l *Relayer) parseDesignateValidatorsEvent(event *state.NotificationEvent) 
 	return pks, nil
 }
 
-func (l *Relayer) isManageContract(notification *state.NotificationEvent) bool {
+func (l *Relayer) isBridgeContract(notification *state.NotificationEvent) bool {
 	return notification.ScriptHash == l.cfg.BridgeContract
 }
 
@@ -306,11 +322,11 @@ func (l *Relayer) sync(batch *taskBatch) error {
 		return err
 	}
 	transactions = transactions[:0]
-	fmt.Println(len(batch.tasks))
 	for _, t := range batch.tasks {
 		var (
-			key    []byte
-			method string
+			key      []byte
+			method   string
+			contract util.Uint160 = l.cfg.BridgeContract
 		)
 		switch v := t.(type) {
 		case depositTask:
@@ -323,11 +339,13 @@ func (l *Relayer) sync(batch *taskBatch) error {
 			method = CCMSyncStateRootValidatorsAddress
 			key = make([]byte, 5)
 			key[0] = StateValidatorRole
-			binary.BigEndian.PutUint32(key[1:], v.index)
+			binary.BigEndian.PutUint32(key[1:], v.index+1)
+			contract = l.roleManagementContractAddress
 		default:
 			return errors.New("unkown task")
 		}
-		tx, err := l.createStateSyncTransaction(method, batch.block, t.TxId(), stateroot, key)
+		log.Printf("handle %s", method)
+		tx, err := l.createStateSyncTransaction(method, batch.block, t.TxId(), stateroot, contract, key)
 		if err != nil {
 			return err
 		}
@@ -343,19 +361,24 @@ func (l *Relayer) getVerifiedStateRoot(index uint32) (*state.MPTRoot, error) {
 	if l.lastStateRoot != nil && l.lastStateRoot.Index >= index {
 		return l.lastStateRoot, nil
 	}
-	for stateIndex := index; stateIndex < index+MaxStateRootTryCount; stateIndex++ {
-		stateroot := l.client.GetStateRoot(stateIndex)
-		if stateroot == nil {
-			return nil, errors.New("can't get state root")
+	for stateIndex := index; stateIndex < index+MaxStateRootGetRange; {
+		stateroot, err := l.client.GetStateRoot(stateIndex)
+		if err != nil {
+			if l.best { // wait next block, verified stateroot approved in next block
+				time.Sleep(15 * time.Second)
+				continue
+			}
+			return nil, fmt.Errorf("can't get state root,  %w", err)
 		}
 		if len(stateroot.Witness) == 0 {
+			stateIndex++
 			continue
 		}
 		log.Printf("verified state root found, index=%d", stateIndex)
 		l.lastStateRoot = stateroot
 		return stateroot, nil
 	}
-	return nil, errors.New("can't get verified state root")
+	return nil, errors.New("can't get verified state root, exceeds MaxStateRootGetRange")
 }
 
 func (l *Relayer) invokeObjectSync(method string, object []byte) (*types.Transaction, error) {
@@ -410,14 +433,14 @@ func (l *Relayer) invokeStateSync(method string, index uint32, txid util.Uint256
 	return l.createEthLayerTransaction(data)
 }
 
-func (l *Relayer) createStateSyncTransaction(method string, block *block.Block, txid util.Uint256, stateroot *state.MPTRoot, key []byte) (*types.Transaction, error) {
+func (l *Relayer) createStateSyncTransaction(method string, block *block.Block, txid util.Uint256, stateroot *state.MPTRoot, contract util.Uint160, key []byte) (*types.Transaction, error) {
 	txproof, err := proveTx(block, txid) // TODO: merkle tree reuse
 	if err != nil {
 		return nil, fmt.Errorf("can't build tx proof: %w", err)
 	}
-	stateproof := l.client.GetProof(stateroot.Root, l.cfg.BridgeContract, key)
-	if stateproof == nil {
-		return nil, errors.New("can't get state proof")
+	stateproof, err := l.client.GetProof(stateroot.Root, contract, key)
+	if err != nil {
+		return nil, fmt.Errorf("can't get state proof %w", err)
 	}
 	tx, err := l.invokeStateSync(method, uint32(block.Index), txid, txproof, stateroot.Index, stateproof)
 	if err != nil {

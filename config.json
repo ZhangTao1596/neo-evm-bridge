@@ -6,8 +6,8 @@
         "http://localhost:20452"
     ],
     "bridgeContract": "0xbbdf1596062cccdeccb7bc8a867a0b9820ca05ed",
-    "start": 2176,
-    "end": 2178,
+    "start": 2251,
+    "end": 2253,
     "wallet": "relayer.json",
     "relayer": "0x6039c5cb351ab43838d5325ab447faae96b39f2c"
 }
