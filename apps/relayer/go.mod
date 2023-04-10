@@ -51,7 +51,7 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/ZhangTao1596/neo-evm-bridge => /Users/zhangtao/workspace/github.com/ZhangTao1596/neo-evm-bridge
+replace github.com/ZhangTao1596/neo-evm-bridge => ./apps/relayer
 
 replace github.com/neo-ngd/neo-go => /Users/zhangtao/workspace/github.com/neo-ngd/neo-go
 
