@@ -8,6 +8,8 @@ import Toast from 'primevue/toast';
 import { useToast } from "primevue/usetoast";
 import ConfirmDialog from 'primevue/confirmdialog';
 import { useConfirm } from "primevue/useconfirm";
+import ProgressSpinner from 'primevue/progressspinner';
+import Tag from 'primevue/tag';
 import { ref, onMounted } from 'vue';
 
 const BridgeContract = "0xe96abc05434f03259a9af5d5454ab2db5739e8d0" //testnet bridge contract
@@ -21,36 +23,45 @@ enum Network {
   N3MainNet,
   N3TestNet = 6,
 }
+enum State {
+  None,
+  Pending,
+  Confirmed,
+}
 const toast = useToast();
 const confirm = useConfirm();
 let amount = ref(0);
-let eaddress = ref("0x0000000000000000000000000000000000000000");
+let eaddress = ref("");
 let user = ref("");
-let neoline: any;
 let network = ref(7);
 let balance = ref("");
+let txid = ref("");
+let txlink = ref("")
+let neoline: any;
 let invokeObj = {};
+let state = ref(State.None);
 
 onMounted(() => {
   window.addEventListener('NEOLine.N3.EVENT.READY', async () => {
     console.log(window.NEOLineN3);
     neoline = new window.NEOLineN3.Init();
   });
-  window.addEventListener('NEOLine.NEO.EVENT.NETWORK_CHANGED', (result) => {
+  window.addEventListener('NEOLine.NEO.EVENT.NETWORK_CHANGED', async (result) => {
     network.value = result.detail.chainId as Network;
     showInfo(`switch to ${Network[network.value]}`);
+    await loadAccountInfo();
   });
-  window.addEventListener('NEOLine.NEO.EVENT.CONNECTED', (result) => {
-    console.log('connected account:', result.detail);
+  window.addEventListener('NEOLine.NEO.EVENT.ACCOUNT_CHANGED', async (result) => {
+    let addr = result.detail.address;
+    user.value = addr;
+    showInfo("account changed " + addr);
+    await loadAccountInfo();
   });
-  window.addEventListener('NEOLine.NEO.EVENT.ACCOUNT_CHANGED', (result) => {
-    console.log('account changed:', result.detail);
-  });
-  window.addEventListener('NEOLine.NEO.EVENT.BLOCK_HEIGHT_CHANGED', (result) => {
-    console.log('block height:', result.detail);
-  });
-  window.addEventListener('NEOLine.NEO.EVENT.TRANSACTION_CONFIRMED', (result) => {
-    console.log('Transaction confirmation detail:', result.detail);
+  window.addEventListener('NEOLine.NEO.EVENT.TRANSACTION_CONFIRMED', async (result) => {
+    let tid = result.detail.txid;
+    if (state.value == State.Pending && tid == txid.value) {
+      await onTransactionConfirmed();
+    }
   });
 })
 
@@ -72,8 +83,12 @@ async function deposit() {
     return;
   }
   let value = { type: "Integer", value: BigInt(amount.value * 100000000).toString() };
-
-  let address = { type: "Hash160", value: eaddress.value };
+  let eaddr = eaddress.value.match(AddressMatcher);
+  if (eaddr == null || eaddr[0] === "0x0000000000000000000000000000000000000000") {
+    showError("invalid address");
+    return;
+  }
+  let address = { type: "Hash160", value: eaddr[0] };
   let signer = { account: fromScriptHash, scopes: 1 };
   invokeObj = {
     scriptHash: GasScriptHash,
@@ -93,6 +108,18 @@ async function switchAccount() {
   user.value = account.address;
 }
 
+async function loadAccountInfo() {
+  let results = await neoline.getBalance({
+    params: [
+      {
+        address: user.value,
+        contracts: [GasScriptHash],
+      }
+    ]
+  });
+  balance.value = results[user.value][0].amount;
+}
+
 async function connectNeoLine() {
   if (neoline == null) {
     showError("neoline not ready!");
@@ -108,17 +135,12 @@ async function connectNeoLine() {
   network.value = Network.N3TestNet;
   let account = await neoline.getAccount();
   user.value = account.address;
-  console.log("get balance");
-  let results = await neoline.getBalance({
-    params: [
-      {
-        address: account.address,
-        contracts: [GasScriptHash],
-      }
-    ]
-  });
-  console.log(results);
-  balance.value = results[account.address][0].amount;
+  await loadAccountInfo();
+}
+
+async function onTransactionConfirmed() {
+  state.value = State.Confirmed;
+  await loadAccountInfo();
 }
 
 function showError(msg: string) {
@@ -131,7 +153,7 @@ function showInfo(msg: string) {
 
 function askConfirm() {
   confirm.require({
-    message: `Are you sure you want to deposit ${amount.value} to ${eaddress.value}?`,
+    message: `Are you sure you want to deposit ${amount.value}GAS to ${eaddress.value}?`,
     header: 'Confirmation',
     icon: 'pi pi-exclamation-triangle',
     accept: async () => {
@@ -147,8 +169,10 @@ async function onConfirm() {
   console.log("yes");
   toast.removeGroup("conf");
   try {
-    let txid = (await neoline.invoke(invokeObj)).txid;
-    showInfo(`deposit success! ${txid}`);
+    txid.value = (await neoline.invoke(invokeObj)).txid;
+    txlink.value = "https://testmagnet.explorer.onegate.space/transactionInfo/" + txid.value;
+    state.value = State.Pending;
+    showInfo(`deposit success! ${txid.value}`);
   } catch (e: any) {
     console.log(e);
     showError(e.description);
@@ -172,7 +196,7 @@ function onReject() {
       <ConfirmDialog></ConfirmDialog>
 
       <div class="p-inputgroup flex-1 justify-content-end">
-        <span class="p-inputgroup-addon">{{ balance }}</span>
+        <span class="p-inputgroup-addon">{{ balance }}GAS</span>
         <span class="p-inputgroup-addon">{{ user }}</span>
         <span class="p-inputgroup-addon">{{ Network[network] }}</span>
         <Avatar icon="pi pi-user" class="mr-2" size="xlarge" @click="switchAccount" />
@@ -190,13 +214,23 @@ function onReject() {
               <span class="p-inputgroup-addon">NeoEVM address</span>
               <InputText type="text" v-model="eaddress" placeholder="0x0000000000000000000000000000000000000000" />
             </div>
-            <div class="p-inputgroup flex-1" style="margin-top: 1rem;">
+            <div class="flex justify-content-end">
+              <small id="username-help" style="margin-top: 1rem;">{{ balance }}GAS</small>
+            </div>
+            <div class="p-inputgroup flex-1">
               <span class=" p-inputgroup-addon">amount</span>
               <InputNumber v-model="amount" inputId="minmaxfraction" :maxFractionDigits="8" />
             </div>
+            <div class="flex flex-row align-items-center justify-content-start" v-show="state != State.None"
+              style="width: 100%;margin-top: 1rem;">
+              <ProgressSpinner aria-label="pending" strokeWidth="4" v-show="state == State.Pending"
+                style="width: 25px; height: 25px;margin-left: -2px;margin-right: -1pt;" />
+              <Tag v-show="state == State.Confirmed" severity="success" value="Success"></Tag>
+              <a v-bind:href="txlink" style="font-size: smaller;color: gray;">{{ txid }}</a>
+            </div>
           </template>
           <template #footer>
-            <Button label="Deposit" @click="deposit" style="margin-top: 1rem;" />
+            <Button label="Deposit" @click="deposit" />
           </template>
         </Card>
       </div>
