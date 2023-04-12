@@ -14,7 +14,7 @@ namespace Bridge
     [DisplayName("BridgeContract")]
     [ManifestExtra("Author", "NGD")]
     [ManifestExtra("Email", "developer@neo.ngd.org")]
-    [ManifestExtra("Description", "This is a contract in Neo for evm layer")]
+    [ManifestExtra("Description", "This is a bridge contract between Neo and Neo evm layer")]
     public class BridgeContract : SmartContract
     {
         private const ulong DepositThreshold = 100000000; //1GAS
