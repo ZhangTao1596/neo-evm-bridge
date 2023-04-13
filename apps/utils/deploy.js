@@ -5,10 +5,9 @@ const { experimental, CONST, sc, wallet } = require("@cityofzion/neon-js");
 
 async function main() {
     let ncfg = config.networks[config.defaultNetwork];
-    console.log(ncfg);
 
     const account = new wallet.Account(ncfg.wif);
-    console.log(account.address);
+    console.log("deployer:" + account.address);
     let bb = await readFileSync("../contract/Contract/bin/sc/BridgeContract.nef");
     let nef = sc.NEF.fromBuffer(bb);
     let manifestJson = require("../contract/Contract/bin/sc/BridgeContract.manifest.json");

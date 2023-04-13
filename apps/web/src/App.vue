@@ -38,7 +38,6 @@ let balance = ref("");
 let txid = ref("");
 let txlink = ref("")
 let neoline: any;
-let invokeObj = {};
 let state = ref(State.None);
 
 onMounted(() => {
@@ -89,14 +88,14 @@ async function deposit() {
     return;
   }
   let address = { type: "Hash160", value: eaddr[0] };
-  let signer = { account: fromScriptHash, scopes: 1 };
-  invokeObj = {
+  let signer = { account: fromScriptHash, scopes: 1 }; // callbyentry
+  let invokeObj = {
     scriptHash: GasScriptHash,
     operation: Method,
     args: [from, to, value, address],
     signers: [signer],
   };
-  askConfirm();
+  askConfirm(invokeObj);
 }
 
 async function switchAccount() {
@@ -151,13 +150,13 @@ function showInfo(msg: string) {
   toast.add({ severity: 'info', summary: 'Info', detail: msg, life: 3000, group: "info" });
 }
 
-function askConfirm() {
+function askConfirm(invokeObj: any) {
   confirm.require({
     message: `Are you sure you want to deposit ${amount.value}GAS to ${eaddress.value}?`,
     header: 'Confirmation',
     icon: 'pi pi-exclamation-triangle',
     accept: async () => {
-      await onConfirm();
+      await onConfirm(invokeObj);
     },
     reject: () => {
       onReject();
@@ -165,14 +164,14 @@ function askConfirm() {
   });
 }
 
-async function onConfirm() {
+async function onConfirm(invokeObj: any) {
   console.log("yes");
   toast.removeGroup("conf");
   try {
     txid.value = (await neoline.invoke(invokeObj)).txid;
     txlink.value = "https://testmagnet.explorer.onegate.space/transactionInfo/" + txid.value;
     state.value = State.Pending;
-    showInfo(`deposit success! ${txid.value}`);
+    showInfo(`transaction sent!`);
   } catch (e: any) {
     console.log(e);
     showError(e.description);
@@ -182,7 +181,6 @@ async function onConfirm() {
 function onReject() {
   console.log("no");
   toast.removeGroup("conf");
-  invokeObj = {};
 }
 </script>
 
@@ -192,6 +190,7 @@ function onReject() {
 
   <main>
     <div class="flex flex-column" style="width: 100%;">
+
       <Toast position="top-center" group="info" />
       <ConfirmDialog></ConfirmDialog>
 
@@ -215,7 +214,7 @@ function onReject() {
               <InputText type="text" v-model="eaddress" placeholder="0x0000000000000000000000000000000000000000" />
             </div>
             <div class="flex justify-content-end">
-              <small id="username-help" style="margin-top: 1rem;">{{ balance }}GAS</small>
+              <small id="username-help" style="margin-top: 1rem;">Total:{{ balance }}GAS</small>
             </div>
             <div class="p-inputgroup flex-1">
               <span class=" p-inputgroup-addon">amount</span>
@@ -230,7 +229,7 @@ function onReject() {
             </div>
           </template>
           <template #footer>
-            <Button label="Deposit" @click="deposit" />
+            <Button label="Deposit" v-bind:disabled="state == State.Pending" @click="deposit" />
           </template>
         </Card>
       </div>

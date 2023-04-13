@@ -94,7 +94,7 @@ namespace Bridge
             OnDeposited(id, from, amount, to);
         }
 
-        public static bool OwnerCheck()
+        private static bool OwnerCheck()
         {
             var owner = (UInt160)Storage.Get(Storage.CurrentContext, OwnerKey);
             return Runtime.CheckWitness(owner);
