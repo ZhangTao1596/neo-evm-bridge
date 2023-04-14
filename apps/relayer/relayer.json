@@ -1,1 +1,0 @@
-{"version":"3.0","accounts":[{"script":"0x0003a173eb5f62d45b0e059dfda0f2d3fd8abf812e9920bbebeab1d9bf5b0389f6ed","address":"0x6039c5cb351ab43838d5325ab447faae96b39f2c","key":"6PYWRPNEyo63uv5umy5MsaNwz1j3TnmiKFhx7pkzNzqJ7qHtFBkW3MXZVc","label":"relayer","lock":false,"isDefault":false}],"scrypt":{"n":16384,"r":8,"p":8},"extra":{"Tokens":null}}
