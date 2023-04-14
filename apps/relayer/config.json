@@ -5,7 +5,8 @@
     "sideSeeds": [
         "http://localhost:8545"
     ],
-    "bridgeContract": "0xbbdf1596062cccdeccb7bc8a867a0b9820ca05ed",
+    "bridgeContract": "0x8d584dc84585c8027962e3370a9839573cb024be",
+    "verifiedRootStart": 1219483,
     "start": 3605,
     "end": 0,
     "wallet": "relayer.json",

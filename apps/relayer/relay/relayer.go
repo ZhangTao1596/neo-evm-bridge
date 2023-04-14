@@ -101,6 +101,9 @@ func (l *Relayer) Run() {
 		batch := new(taskBatch)
 		batch.block = block
 		batch.isJoint = l.isJointHeader(&block.Header)
+		if batch.isJoint {
+			log.Printf("joint header, index=%d, hash=%s\n", block.Index, block.Hash())
+		}
 		for _, tx := range block.Transactions {
 			log.Printf("syncing tx, hash=%s\n", tx.Hash())
 			applicationlog, err := l.client.GetApplicationLog(tx.Hash())
@@ -117,7 +120,7 @@ func (l *Relayer) Run() {
 								if err != nil {
 									panic(err)
 								}
-								log.Printf("deposit event, id=%d, from=%s, amount=%d, to=%s\n", requestId, from, amount, to)
+								log.Printf("deposit event, index=%d, tx=%s, id=%d, from=%s, amount=%d, to=%s\n", block.Index, tx.Hash(), requestId, from, amount, to)
 								if amount < MintThreshold {
 									log.Printf("threshold unreached, id=%d, from=%s, amount=%d, to=%s\n", requestId, from, amount, to)
 									continue
@@ -131,7 +134,7 @@ func (l *Relayer) Run() {
 								if err != nil {
 									panic(err)
 								}
-								log.Printf("validators designate event, pks=%s\n", pks)
+								log.Printf("validators designate event, index=%d, tx=%s, pks=%s\n", block.Index, tx.Hash(), pks)
 								batch.addTask(validatorsDesignateTask{
 									txid: tx.Hash(),
 								})
@@ -142,7 +145,7 @@ func (l *Relayer) Run() {
 								panic(err)
 							}
 							if isStateValidatorsDesignate {
-								log.Printf("state validators designate event, index=%d\n", index)
+								log.Printf("state validators designate event, index=%d, tx=%s,index=%d\n", block.Index, tx.Hash(), index)
 								batch.addTask(stateValidatorsChangeTask{
 									txid:  tx.Hash(),
 									index: index,
@@ -361,7 +364,11 @@ func (l *Relayer) getVerifiedStateRoot(index uint32) (*state.MPTRoot, error) {
 	if l.lastStateRoot != nil && l.lastStateRoot.Index >= index {
 		return l.lastStateRoot, nil
 	}
-	for stateIndex := index; stateIndex < index+MaxStateRootGetRange; {
+	if index < l.cfg.VerifiedRootStart {
+		index = l.cfg.VerifiedRootStart
+	}
+	stateIndex := index
+	for stateIndex < index+MaxStateRootGetRange {
 		stateroot, err := l.client.GetStateRoot(stateIndex)
 		if err != nil {
 			if l.best { // wait next block, verified stateroot approved in next block
@@ -400,7 +407,7 @@ func (l *Relayer) createHeaderSyncTransaction(rpcHeader *block.Header) (*types.T
 			log.Println("skip synced header")
 			return nil, nil
 		} else {
-			return nil, fmt.Errorf("can't %s, header=%s, h=%s,: %w", CCMSyncHeader, rpcHeader.Hash(), rpcHeader.Hash(), err)
+			return nil, fmt.Errorf("can't %s, header=%s: %w", CCMSyncHeader, rpcHeader.Hash(), err)
 		}
 	}
 	log.Printf("created %s tx, txid=%s\n", CCMSyncHeader, tx.Hash())

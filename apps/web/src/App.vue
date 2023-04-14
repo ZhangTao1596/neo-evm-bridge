@@ -12,7 +12,7 @@ import ProgressSpinner from 'primevue/progressspinner';
 import Tag from 'primevue/tag';
 import { ref, onMounted } from 'vue';
 
-const BridgeContract = "0xe96abc05434f03259a9af5d5454ab2db5739e8d0" //testnet bridge contract
+const BridgeContract = "0x1c3ba4cfb7a9c9c1617c28d5c91160426859895f" //testnet bridge contract
 const GasScriptHash = "0xd2a4cff31913016155e38e474a2c06d08be276cf";
 
 const AddressMatcher = /^0x[a-fA-F0-9]{40}$/g

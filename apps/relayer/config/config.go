@@ -10,13 +10,14 @@ import (
 )
 
 type Config struct {
-	MainSeeds      []string       `json:"mainSeeds"`
-	SideSeeds      []string       `json:"sideSeeds"`
-	Start          uint32         `json:"start"`
-	End            uint32         `json:"end"`
-	BridgeContract util.Uint160   `json:"bridgeContract"`
-	Wallet         string         `json:"wallet"`
-	Relayer        common.Address `json:"relayer"`
+	MainSeeds         []string       `json:"mainSeeds"`
+	SideSeeds         []string       `json:"sideSeeds"`
+	VerifiedRootStart uint32         `json:"verifiedRootStart"`
+	Start             uint32         `json:"start"`
+	End               uint32         `json:"end"`
+	BridgeContract    util.Uint160   `json:"bridgeContract"`
+	Wallet            string         `json:"wallet"`
+	Relayer           common.Address `json:"relayer"`
 }
 
 func Load(path string) (*Config, error) {
