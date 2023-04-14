@@ -10,10 +10,12 @@ import ConfirmDialog from 'primevue/confirmdialog';
 import { useConfirm } from "primevue/useconfirm";
 import ProgressSpinner from 'primevue/progressspinner';
 import Tag from 'primevue/tag';
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onUnmounted } from 'vue';
 
 const BridgeContract = "0x1c3ba4cfb7a9c9c1617c28d5c91160426859895f" //testnet bridge contract
 const GasScriptHash = "0xd2a4cff31913016155e38e474a2c06d08be276cf";
+const NeoEVMChainID = "0x2D5311";
+const NeoEVMRPCs = ["http://52.186.172.226:32332"];
 
 const AddressMatcher = /^0x[a-fA-F0-9]{40}$/g
 enum Network {
@@ -32,49 +34,87 @@ const toast = useToast();
 const confirm = useConfirm();
 let amount = ref(0);
 let eaddress = ref("");
-let user = ref("");
+let naddress = ref("");
 let network = ref(7);
 let balance = ref("");
 let txid = ref("");
 let txlink = ref("")
 let neoline: any;
+let metamask: any;
+let maddress = ref("");
+let mbalance = ref("");
+let mchain = ref("");
 let state = ref(State.None);
 
 onMounted(() => {
   window.addEventListener('NEOLine.N3.EVENT.READY', async () => {
-    console.log(window.NEOLineN3);
-    neoline = new window.NEOLineN3.Init();
+    console.log((window as any).NEOLineN3);
+    neoline = new (window as any).NEOLineN3.Init();
+    window.addEventListener('NEOLine.NEO.EVENT.NETWORK_CHANGED', handleNLNetworkChanged);
+    window.addEventListener('NEOLine.NEO.EVENT.ACCOUNT_CHANGED', handleNLAccountChanged);
+    window.addEventListener('NEOLine.NEO.EVENT.TRANSACTION_CONFIRMED', handleNLTransactionConfirmed);
   });
-  window.addEventListener('NEOLine.NEO.EVENT.NETWORK_CHANGED', async (result) => {
-    network.value = result.detail.chainId as Network;
-    showInfo(`switch to ${Network[network.value]}`);
-    await loadAccountInfo();
-  });
-  window.addEventListener('NEOLine.NEO.EVENT.ACCOUNT_CHANGED', async (result) => {
-    let addr = result.detail.address;
-    user.value = addr;
-    showInfo("account changed " + addr);
-    await loadAccountInfo();
-  });
-  window.addEventListener('NEOLine.NEO.EVENT.TRANSACTION_CONFIRMED', async (result) => {
-    let tid = result.detail.txid;
-    if (state.value == State.Pending && tid == txid.value) {
-      await onTransactionConfirmed();
-    }
-  });
+  if (typeof (window as any).ethereum !== 'undefined') {
+    metamask = (window as any).ethereum;
+    metamask.on('accountsChanged', handleMMAccountChanged);
+
+    metamask.on('chainChanged', handleMMNetworkChanged);
+  }
 })
+
+onUnmounted(() => {
+  if (metamask != null) {
+    metamask.removeListener('accountsChanged', handleMMAccountChanged);
+    metamask.removeListener('chainChanged', handleMMNetworkChanged);
+  }
+  if (neoline != null) {
+    window.removeEventListener('NEOLine.NEO.EVENT.NETWORK_CHANGED', handleNLNetworkChanged);
+    window.removeEventListener('NEOLine.NEO.EVENT.ACCOUNT_CHANGED', handleNLAccountChanged);
+    window.removeEventListener('NEOLine.NEO.EVENT.TRANSACTION_CONFIRMED', handleNLTransactionConfirmed);
+  }
+})
+
+async function handleNLAccountChanged(result: any) {
+  let addr = result.detail.address;
+  naddress.value = addr;
+  showInfo("account changed " + addr);
+  await loadAccountInfo();
+}
+
+async function handleNLNetworkChanged(result: any) {
+  network.value = result.detail.chainId as Network;
+  showInfo(`switch to ${Network[network.value]}`);
+  await loadAccountInfo();
+}
+
+async function handleNLTransactionConfirmed(result: any) {
+  let tid = result.detail.txid;
+  if (state.value == State.Pending && tid == txid.value) {
+    await onTransactionConfirmed();
+  }
+}
+
+function handleMMAccountChanged(accounts: any) {
+  maddress.value = accounts[0];
+  showInfo("evm layer account changed " + maddress.value);
+}
+
+function handleMMNetworkChanged(chainId: any) {
+  mchain.value = chainId
+  showInfo("evm layer network changed " + mchain.value);
+}
 
 async function deposit() {
   if (neoline == null) {
     showError("neoline not ready!");
     return;
   }
-  if (user.value === "") {
+  if (naddress.value === "") {
     showError("wallet unconnected!");
     return;
   }
   const Method = "transfer";
-  const fromScriptHash = (await neoline.AddressToScriptHash({ address: user.value })).scriptHash;
+  const fromScriptHash = (await neoline.AddressToScriptHash({ address: naddress.value })).scriptHash;
   let from = { type: "Hash160", value: fromScriptHash };
   let to = { type: "Hash160", value: BridgeContract };
   if (amount.value < 1) {
@@ -98,25 +138,20 @@ async function deposit() {
   askConfirm(invokeObj);
 }
 
-async function switchAccount() {
-  if (neoline == null) {
-    showError("neoline not ready!");
-    return;
-  }
-  let account = await neoline.switchWalletAccount();
-  user.value = account.address;
-}
-
 async function loadAccountInfo() {
   let results = await neoline.getBalance({
     params: [
       {
-        address: user.value,
+        address: naddress.value,
         contracts: [GasScriptHash],
       }
     ]
   });
-  balance.value = results[user.value][0].amount;
+  balance.value = results[naddress.value][0].amount;
+}
+
+async function loadMAddressInfo() {
+  mbalance.value = await metamask.request({ method: "eth_getBalance", params: [maddress.value] });
 }
 
 async function connectNeoLine() {
@@ -124,7 +159,7 @@ async function connectNeoLine() {
     showError("neoline not ready!");
     return;
   }
-  if (user.value !== "") {
+  if (naddress.value !== "") {
     showInfo("wallet already connected!");
     return;
   }
@@ -133,8 +168,55 @@ async function connectNeoLine() {
   });
   network.value = Network.N3TestNet;
   let account = await neoline.getAccount();
-  user.value = account.address;
+  naddress.value = account.address;
   await loadAccountInfo();
+}
+
+async function switchMetaMaskNetwork() {
+  try {
+    await metamask.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: NeoEVMChainID }],
+    });
+  } catch (switchError: any) {
+    // This error code indicates that the chain has not been added to MetaMask.
+    if (switchError.code === 4902) {
+      try {
+        await metamask.request({
+          method: 'wallet_addEthereumChain',
+          params: [
+            {
+              chainId: NeoEVMChainID,
+              chainName: 'NeoEVM',
+              rpcUrls: NeoEVMRPCs,
+              nativeCurrency: {
+                name: "gas",
+                symbol: "GAS",
+                decimals: 18,
+              },
+            },
+          ],
+        });
+        return;
+      } catch (addError) {
+        showError("can't add NeoEVM into MetaMask!");
+        return;
+      }
+    }
+    showError(switchError.message);
+  }
+}
+
+async function connectMetaMask() {
+  if (metamask == null) {
+    showError("metamask not ready!");
+    return;
+  }
+  await switchMetaMaskNetwork();
+  let accounts = await metamask.request({ method: 'eth_requestAccounts' });
+  maddress.value = accounts[0];
+  eaddress.value = accounts[0];
+  await loadMAddressInfo();
 }
 
 async function onTransactionConfirmed() {
@@ -196,11 +278,18 @@ function onReject() {
 
       <div class="p-inputgroup flex-1 justify-content-end">
         <span class="p-inputgroup-addon">{{ balance }}GAS</span>
-        <span class="p-inputgroup-addon">{{ user }}</span>
+        <span class="p-inputgroup-addon">{{ naddress }}</span>
         <span class="p-inputgroup-addon">{{ Network[network] }}</span>
-        <Avatar icon="pi pi-user" class="mr-2" size="xlarge" @click="switchAccount" />
-        <Button label="ConnectWallet" @click="connectNeoLine" />
+        <Button label="ConnectNeoLine" @click="connectNeoLine" />
       </div>
+
+      <div class="p-inputgroup flex-1 justify-content-end" style="margin-top: 3rem;">
+        <span class="p-inputgroup-addon">{{ mbalance }}GAS</span>
+        <span class="p-inputgroup-addon">{{ maddress }}</span>
+        <span class="p-inputgroup-addon">NeoEVM</span>
+        <Button label="ConnectMetaMask" @click="connectMetaMask" />
+      </div>
+
       <div class="flex align-items-center justify-content-center">
         <Card style="width: 40em; margin-top: 3rem;">
           <template #header>
