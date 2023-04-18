@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import Avatar from 'primevue/avatar';
 import Button from 'primevue/button';
 import Card from 'primevue/card';
 import InputNumber from 'primevue/inputnumber';
@@ -14,10 +13,19 @@ import { ref, onMounted, onUnmounted } from 'vue';
 
 const BridgeContract = "0x1c3ba4cfb7a9c9c1617c28d5c91160426859895f" //testnet bridge contract
 const GasScriptHash = "0xd2a4cff31913016155e38e474a2c06d08be276cf";
-const NeoEVMChainID = "0x2D5311";
-const NeoEVMRPCs = ["http://52.186.172.226:32332"];
+const NeoEVMChainID = "0x2d5311";
+const NeoEVMRPCs = ["https://evm.ngd.network:32332"];
 
 const AddressMatcher = /^0x[a-fA-F0-9]{40}$/g
+
+const EthNetwork = new Map();
+EthNetwork.set("0x1", "Mainnet");
+EthNetwork.set("0x3", "Ropsten");
+EthNetwork.set("0x4", "Rinkeby");
+EthNetwork.set("0x5", "Goerli");
+EthNetwork.set("0x2a", "Kovan");
+EthNetwork.set(NeoEVMChainID, "NeoEVM");
+
 enum Network {
   N3PrivateNet = 0,
   N2MainNet,
@@ -96,12 +104,15 @@ async function handleNLTransactionConfirmed(result: any) {
 
 function handleMMAccountChanged(accounts: any) {
   maddress.value = accounts[0];
+  eaddress.value = maddress.value;
   showInfo("evm layer account changed " + maddress.value);
 }
 
 function handleMMNetworkChanged(chainId: any) {
+  console.log("metamask network changed");
+  console.log(chainId);
   mchain.value = chainId
-  showInfo("evm layer network changed " + mchain.value);
+  showInfo("evm layer network changed " + EthNetwork.get(mchain.value));
 }
 
 async function deposit() {
@@ -178,6 +189,7 @@ async function switchMetaMaskNetwork() {
       method: 'wallet_switchEthereumChain',
       params: [{ chainId: NeoEVMChainID }],
     });
+    mchain.value = NeoEVMChainID;
   } catch (switchError: any) {
     // This error code indicates that the chain has not been added to MetaMask.
     if (switchError.code === 4902) {
@@ -197,6 +209,7 @@ async function switchMetaMaskNetwork() {
             },
           ],
         });
+        mchain.value = NeoEVMChainID;
         return;
       } catch (addError) {
         showError("can't add NeoEVM into MetaMask!");
@@ -216,7 +229,6 @@ async function connectMetaMask() {
   let accounts = await metamask.request({ method: 'eth_requestAccounts' });
   maddress.value = accounts[0];
   eaddress.value = accounts[0];
-  await loadMAddressInfo();
 }
 
 async function onTransactionConfirmed() {
@@ -284,9 +296,8 @@ function onReject() {
       </div>
 
       <div class="p-inputgroup flex-1 justify-content-end" style="margin-top: 3rem;">
-        <span class="p-inputgroup-addon">{{ mbalance }}GAS</span>
         <span class="p-inputgroup-addon">{{ maddress }}</span>
-        <span class="p-inputgroup-addon">NeoEVM</span>
+        <span class="p-inputgroup-addon">{{ EthNetwork.get(mchain) }}</span>
         <Button label="ConnectMetaMask" @click="connectMetaMask" />
       </div>
 
