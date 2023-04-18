@@ -124,6 +124,10 @@ async function deposit() {
     showError("wallet unconnected!");
     return;
   }
+  if (network.value !== Network.N3TestNet) {
+    showError("only N3Testnet supported");
+    return;
+  }
   const Method = "transfer";
   const fromScriptHash = (await neoline.AddressToScriptHash({ address: naddress.value })).scriptHash;
   let from = { type: "Hash160", value: fromScriptHash };
@@ -329,7 +333,8 @@ function onReject() {
             </div>
           </template>
           <template #footer>
-            <Button label="Deposit" v-bind:disabled="state == State.Pending" @click="deposit" />
+            <Button label="Deposit" v-bind:disabled="state == State.Pending || network != Network.N3TestNet"
+              @click="deposit" />
           </template>
         </Card>
       </div>
