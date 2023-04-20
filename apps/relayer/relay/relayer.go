@@ -347,7 +347,6 @@ func (l *Relayer) sync(batch *taskBatch) error {
 		default:
 			return errors.New("unkown task")
 		}
-		log.Printf("handle %s", method)
 		tx, err := l.createStateSyncTransaction(method, batch.block, t.TxId(), stateroot, contract, key)
 		if err != nil {
 			return err
@@ -519,7 +518,7 @@ func (l *Relayer) commitTransactions(transactions []*types.Transaction) error {
 		}
 		appending[i] = h
 	}
-	retry := 3
+	retry := 10
 	for retry > 0 {
 		time.Sleep(BlockTimeSeconds * time.Second)
 		rest := make([]common.Hash, 0, len(appending))
@@ -535,7 +534,7 @@ func (l *Relayer) commitTransactions(transactions []*types.Transaction) error {
 		appending = rest
 		retry--
 	}
-	return fmt.Errorf("can't commit transactions: [%v]", appending)
+	return fmt.Errorf("can't commit transactions: %v", appending)
 }
 
 type taskBatch struct {
