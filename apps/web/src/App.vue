@@ -117,6 +117,12 @@ function handleMMNetworkChanged(chainId: any) {
   showInfo("evm layer network changed " + EthNetwork.get(mchain.value));
 }
 
+function resetState() {
+  dtxid.value = "";
+  mtxid.value = "";
+  state.value = State.None;
+}
+
 async function deposit() {
   if (neoline == null) {
     showError("neoline not ready!");
@@ -130,6 +136,7 @@ async function deposit() {
     showError("only N3Testnet supported");
     return;
   }
+  resetState();
   const Method = "transfer";
   const fromScriptHash = (await neoline.AddressToScriptHash({ address: naddress.value })).scriptHash;
   let from = { type: "Hash160", value: fromScriptHash };
