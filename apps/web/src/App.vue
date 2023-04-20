@@ -10,6 +10,7 @@ import { useConfirm } from "primevue/useconfirm";
 import ProgressSpinner from 'primevue/progressspinner';
 import Tag from 'primevue/tag';
 import { ref, onMounted, onUnmounted } from 'vue';
+import * as ethers from "ethers";
 
 const BridgeContract = "0x1c3ba4cfb7a9c9c1617c28d5c91160426859895f" //testnet bridge contract
 const GasScriptHash = "0xd2a4cff31913016155e38e474a2c06d08be276cf";
@@ -37,6 +38,8 @@ enum State {
   None,
   Pending,
   Confirmed,
+  Relaying,
+  Minted,
 }
 const toast = useToast();
 const confirm = useConfirm();
@@ -45,8 +48,10 @@ let eaddress = ref("");
 let naddress = ref("");
 let network = ref(7);
 let balance = ref("");
-let txid = ref("");
-let txlink = ref("")
+let dtxid = ref("");
+let mtxid = ref("");
+let dtxlink = ref("");
+let mtxlink = ref("");
 let neoline: any;
 let metamask: any;
 let maddress = ref("");
@@ -56,7 +61,6 @@ let state = ref(State.None);
 
 onMounted(() => {
   window.addEventListener('NEOLine.N3.EVENT.READY', async () => {
-    console.log((window as any).NEOLineN3);
     neoline = new (window as any).NEOLineN3.Init();
     window.addEventListener('NEOLine.NEO.EVENT.NETWORK_CHANGED', handleNLNetworkChanged);
     window.addEventListener('NEOLine.NEO.EVENT.ACCOUNT_CHANGED', handleNLAccountChanged);
@@ -97,8 +101,8 @@ async function handleNLNetworkChanged(result: any) {
 
 async function handleNLTransactionConfirmed(result: any) {
   let tid = result.detail.txid;
-  if (state.value == State.Pending && tid == txid.value) {
-    await onTransactionConfirmed();
+  if (state.value == State.Pending && tid == dtxid.value) {
+    await onTransactionConfirmed(tid);
   }
 }
 
@@ -109,8 +113,6 @@ function handleMMAccountChanged(accounts: any) {
 }
 
 function handleMMNetworkChanged(chainId: any) {
-  console.log("metamask network changed");
-  console.log(chainId);
   mchain.value = chainId
   showInfo("evm layer network changed " + EthNetwork.get(mchain.value));
 }
@@ -235,9 +237,51 @@ async function connectMetaMask() {
   eaddress.value = accounts[0];
 }
 
-async function onTransactionConfirmed() {
-  state.value = State.Confirmed;
+async function getDepositedId(txid: string) {
+  let applog = await neoline.getApplicationLog({ txid: txid });
+  let id = applog.executions[0].notifications[1].state.value[0].value;
+  return Number(id);
+}
+
+function scriptToGetMinted(id: Number) {
+  const iface = new ethers.Interface('[{"type":"function","name":"getMinted","inputs":[{"name":"a","type":"int64"}],"outputs":[{"name":"result","type":"bytes"}],"stateMutability":"nonpayable view"}]');
+  return iface.encodeFunctionData("getMinted(int64)", [id]);
+}
+
+function getMinted(id: Number) {
+  const From = "0xe9dea4d990d12ce5e3c7f19f9fcc2fe28c95b0c2"; // any address with GAS
+  const Bridge = "0x00000000000000000000000000000000000000E5";
+  const BlockscoutExplorerPrefix = 'http://evm.ngd.network/tx/';
+  const EmptyHash = "0x" + "00".repeat(32);
+  let timer = setInterval(async () => {
+    try {
+      let data = scriptToGetMinted(id);
+      let txid = await metamask.request({
+        method: "eth_call", params: [{
+          from: From,
+          to: Bridge,
+          data: data,
+        }]
+      });
+      if (txid != null && txid != EmptyHash) {
+        mtxid.value = txid;
+        clearInterval(timer);
+        state.value = State.Minted;
+        mtxlink.value = BlockscoutExplorerPrefix + txid;
+      }
+    } catch (e: any) {
+      console.log("can't get minted: " + e.message);
+      clearInterval(timer);
+    }
+  }, 500);
+}
+
+async function onTransactionConfirmed(tid: string) {
+  state.value = State.Relaying;
+  mtxid.value = "relaying";
   await loadAccountInfo();
+  let id = await getDepositedId(tid);
+  getMinted(id);
 }
 
 function showError(msg: string) {
@@ -263,11 +307,10 @@ function askConfirm(invokeObj: any) {
 }
 
 async function onConfirm(invokeObj: any) {
-  console.log("yes");
   toast.removeGroup("conf");
   try {
-    txid.value = (await neoline.invoke(invokeObj)).txid;
-    txlink.value = "https://testmagnet.explorer.onegate.space/transactionInfo/" + txid.value;
+    dtxid.value = (await neoline.invoke(invokeObj)).txid;
+    dtxlink.value = "https://testmagnet.explorer.onegate.space/transactionInfo/" + dtxid.value;
     state.value = State.Pending;
     showInfo(`transaction sent!`);
   } catch (e: any) {
@@ -277,7 +320,6 @@ async function onConfirm(invokeObj: any) {
 }
 
 function onReject() {
-  console.log("no");
   toast.removeGroup("conf");
 }
 </script>
@@ -324,16 +366,25 @@ function onReject() {
               <span class=" p-inputgroup-addon">amount</span>
               <InputNumber v-model="amount" inputId="minmaxfraction" :maxFractionDigits="8" />
             </div>
-            <div class="flex flex-row align-items-center justify-content-start" v-show="state != State.None"
+            <div class="flex flex-row align-items-center justify-content-between" v-show="state != State.None"
               style="width: 100%;margin-top: 1rem;">
-              <ProgressSpinner aria-label="pending" strokeWidth="4" v-show="state == State.Pending"
-                style="width: 25px; height: 25px;margin-left: -2px;margin-right: -1pt;" />
-              <Tag v-show="state == State.Confirmed" severity="success" value="Success"></Tag>
-              <a v-bind:href="txlink" style="font-size: smaller;color: gray;">{{ txid }}</a>
+              <ProgressSpinner aria-label="pending" strokeWidth="6" v-show="state == State.Pending"
+                style="width: 30px; height: 30px;margin-left: -2px;margin-right: -1pt;" />
+              <Tag v-show="state >= State.Confirmed" severity="success" value="deposited"></Tag>
+              <a v-bind:href="dtxlink" style="font-size: smaller;color: gray;">{{
+                dtxid }}</a>
+            </div>
+            <div class="flex flex-row align-items-center justify-content-between" v-show="state != State.None"
+              style="width: 100%;margin-top: 1rem;">
+              <ProgressSpinner aria-label="relaying" strokeWidth="6" v-show="state == State.Relaying"
+                style="width: 30px; height: 30px;margin-left: -2px;margin-right: -1pt;" />
+              <Tag v-show="state >= State.Minted" severity="success" value="minted"></Tag>
+              <a v-bind:href="mtxlink" style="font-size: smaller;color: gray;">{{ mtxid }}</a>
             </div>
           </template>
           <template #footer>
-            <Button label="Deposit" v-bind:disabled="state == State.Pending || network != Network.N3TestNet"
+            <Button label="Deposit"
+              v-bind:disabled="(state >= State.Pending && state < State.Minted) || network != Network.N3TestNet"
               @click="deposit" />
           </template>
         </Card>
