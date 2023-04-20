@@ -167,8 +167,8 @@ async function loadAccountInfo() {
   balance.value = results[naddress.value][0].amount;
 }
 
-async function loadMAddressInfo() {
-  mbalance.value = await metamask.request({ method: "eth_getBalance", params: [maddress.value] });
+async function loadMAccountInfo() {
+  mbalance.value = ethers.formatEther(await metamask.request({ method: "eth_getBalance", params: [maddress.value] }));
 }
 
 async function connectNeoLine() {
@@ -235,6 +235,7 @@ async function connectMetaMask() {
   let accounts = await metamask.request({ method: 'eth_requestAccounts' });
   maddress.value = accounts[0];
   eaddress.value = accounts[0];
+  await loadMAccountInfo();
 }
 
 async function getDepositedId(txid: string) {
@@ -268,6 +269,7 @@ function getMinted(id: Number) {
         clearInterval(timer);
         state.value = State.Minted;
         mtxlink.value = BlockscoutExplorerPrefix + txid;
+        await loadMAccountInfo();
       }
     } catch (e: any) {
       console.log("can't get minted: " + e.message);
@@ -342,6 +344,7 @@ function onReject() {
       </div>
 
       <div class="p-inputgroup flex-1 justify-content-end" style="margin-top: 3rem;">
+        <span class="p-inputgroup-addon">{{ mbalance }}GAS</span>
         <span class="p-inputgroup-addon">{{ maddress }}</span>
         <span class="p-inputgroup-addon">{{ EthNetwork.get(mchain) }}</span>
         <Button label="ConnectMetaMask" @click="connectMetaMask" />
