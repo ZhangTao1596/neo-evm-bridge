@@ -20,4 +20,4 @@ async function main() {
     console.log(r);
 }
 
-main().then(() => process.exit(0)).catch(e => console.log(e));
+main().then(() => process.exit(0)).catch(console.log);

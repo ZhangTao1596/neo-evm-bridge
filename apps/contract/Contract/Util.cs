@@ -102,7 +102,7 @@ namespace Bridge
         public static bool ECPointsCheck(ECPoint[] ps)
         {
             foreach (var p in ps)
-                if (!p.IsValid) return false;
+                if (!p.IsValid || (p[0] != 2 && p[0] != 3)) return false;
             return true;
         }
 

@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	sblock "github.com/neo-ngd/neo-go/pkg/core/block"
-	sstate "github.com/neo-ngd/neo-go/pkg/core/state"
-	sio "github.com/neo-ngd/neo-go/pkg/io"
+	sblock "github.com/DigitalLabs-web3/neo-go-evm/pkg/core/block"
+	sstate "github.com/DigitalLabs-web3/neo-go-evm/pkg/core/state"
+	sio "github.com/DigitalLabs-web3/neo-go-evm/pkg/io"
 	"github.com/nspcc-dev/neo-go/pkg/core/block"
 	"github.com/nspcc-dev/neo-go/pkg/core/state"
 	mio "github.com/nspcc-dev/neo-go/pkg/io"

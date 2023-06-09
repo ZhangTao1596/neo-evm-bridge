@@ -1,8 +1,8 @@
 package relay
 
 import (
-	"crypto/elliptic"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -10,21 +10,22 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ZhangTao1596/neo-evm-bridge/config"
-	"github.com/ZhangTao1596/neo-evm-bridge/constantclient"
+	"github.com/DigitalLabs-web3/neo-evm-bridge/config"
+	"github.com/DigitalLabs-web3/neo-evm-bridge/constantclient"
+	"github.com/DigitalLabs-web3/neo-go-evm/pkg/crypto/keys"
+	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/nspcc-dev/neo-go/pkg/core/block"
-	"github.com/nspcc-dev/neo-go/pkg/crypto/keys"
 	"github.com/nspcc-dev/neo-go/pkg/smartcontract/trigger"
 	"github.com/nspcc-dev/neo-go/pkg/util"
 	"github.com/nspcc-dev/neo-go/pkg/vm/stackitem"
 	"github.com/nspcc-dev/neo-go/pkg/vm/vmstate"
 
-	sstate "github.com/neo-ngd/neo-go/pkg/core/state"
-	"github.com/neo-ngd/neo-go/pkg/core/transaction"
-	sresult "github.com/neo-ngd/neo-go/pkg/rpc/response/result"
-	"github.com/neo-ngd/neo-go/pkg/wallet"
+	sstate "github.com/DigitalLabs-web3/neo-go-evm/pkg/core/state"
+	"github.com/DigitalLabs-web3/neo-go-evm/pkg/core/transaction"
+	sresult "github.com/DigitalLabs-web3/neo-go-evm/pkg/rpc/response/result"
+	"github.com/DigitalLabs-web3/neo-go-evm/pkg/wallet"
 	"github.com/nspcc-dev/neo-go/pkg/core/state"
 )
 
@@ -275,14 +276,14 @@ func (l *Relayer) parseDesignateValidatorsEvent(event *state.NotificationEvent) 
 			err = errors.New("invalid ecpoint type in validators change event")
 			return
 		}
-		pkb, e := p.TryBytes()
+		pk, e := p.TryBytes()
 		if e != nil {
 			err = fmt.Errorf("can't parse ecpoint base64: %w", e)
 			return
 		}
-		pt, e := keys.NewPublicKeyFromBytes(pkb, elliptic.P256())
-		if err != nil {
-			err = fmt.Errorf("can't parse ecpoint: %w", e)
+		pt, e := keys.NewPublicKeyFromBytes(pk, btcec.S256())
+		if e != nil {
+			err = fmt.Errorf("can't parse ecpoint, pk=%s, err=%w", hex.EncodeToString(pk), e)
 			return
 		}
 		pks[i] = pt

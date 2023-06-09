@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"syscall"
 
-	"github.com/ZhangTao1596/neo-evm-bridge/config"
-	"github.com/ZhangTao1596/neo-evm-bridge/relay"
+	"github.com/DigitalLabs-web3/neo-evm-bridge/config"
+	"github.com/DigitalLabs-web3/neo-evm-bridge/relay"
+	"github.com/DigitalLabs-web3/neo-go-evm/pkg/wallet"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/neo-ngd/neo-go/pkg/wallet"
 	"golang.org/x/term"
 )
 

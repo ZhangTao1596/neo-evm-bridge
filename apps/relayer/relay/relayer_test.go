@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/DigitalLabs-web3/neo-go-evm/pkg/crypto/hash"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/joeqian10/neo3-gogogo/helper"
-	"github.com/neo-ngd/neo-go/pkg/crypto/hash"
 	"github.com/stretchr/testify/assert"
 )
 

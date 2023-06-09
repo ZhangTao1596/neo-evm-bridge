@@ -3,12 +3,12 @@ package relay
 import (
 	"encoding/binary"
 
+	sblock "github.com/DigitalLabs-web3/neo-go-evm/pkg/core/block"
+	sstate "github.com/DigitalLabs-web3/neo-go-evm/pkg/core/state"
+	"github.com/DigitalLabs-web3/neo-go-evm/pkg/core/transaction"
+	"github.com/DigitalLabs-web3/neo-go-evm/pkg/crypto/hash"
+	sio "github.com/DigitalLabs-web3/neo-go-evm/pkg/io"
 	"github.com/ethereum/go-ethereum/common"
-	sblock "github.com/neo-ngd/neo-go/pkg/core/block"
-	sstate "github.com/neo-ngd/neo-go/pkg/core/state"
-	"github.com/neo-ngd/neo-go/pkg/core/transaction"
-	"github.com/neo-ngd/neo-go/pkg/crypto/hash"
-	sio "github.com/neo-ngd/neo-go/pkg/io"
 	"github.com/nspcc-dev/neo-go/pkg/core/block"
 	"github.com/nspcc-dev/neo-go/pkg/core/state"
 	"github.com/nspcc-dev/neo-go/pkg/util"
@@ -72,4 +72,10 @@ func mainStateRootToSideStateRoot(s *state.MPTRoot) *sstate.MPTRoot {
 
 func staterootToBytes(stateroot *sstate.MPTRoot) ([]byte, error) {
 	return sio.ToByteArray(stateroot)
+}
+
+func reverse[S ~[]E, E any](s S) {
+	for i, j := 0, len(s)-1; i < j; i, j = i+1, j-1 {
+		s[i], s[j] = s[j], s[i]
+	}
 }
